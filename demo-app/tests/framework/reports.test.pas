@@ -133,6 +133,54 @@ begin
           Expect(TJSObject(SummariesJS[2])['formattedValue']).ToBe('4');
         end);
 
+      // 3a. WinAnsi text keeps Helvetica and is written as octal escapes, not raw characters
+      It('should keep Helvetica and write accented WinAnsi text as octal escapes', procedure
+        var
+          DS: TBVDataSet;
+          Rep: TBVReport;
+          PdfContent, Accented: string;
+        begin
+          DS := CreateSampleSalesDataSet;
+          Rep := TBVReport.Create(DS);
+          asm Accented = 'Relat' + String.fromCharCode(0xF3) + 'rio ' + String.fromCharCode(0x20AC); end;
+          Rep.Title(Accented).Columns(['customer:Customer']);
+          PdfContent := Rep.GeneratePDF;
+          Expect(Pos('/BaseFont /Helvetica', PdfContent) > 0).ToBe(True);
+          Expect(Pos('(Relat\363rio \200) Tj', PdfContent) > 0).ToBe(True);
+        end);
+
+      // 3b. Text outside WinAnsi switches the PDF to the embedded Latin + Greek fonts
+      It('should embed a Unicode font and stay pure ASCII when PDF text is Greek', procedure
+        var
+          DS: TBVDataSet;
+          Rep: TBVReport;
+          PdfContent, Greek: string;
+          IsAscii, OffsetsOk: Boolean;
+        begin
+          asm Greek = String.fromCharCode(0x391, 0x3BD, 0x3B1, 0x3C6, 0x3BF, 0x3C1, 0x3AC); end;
+          DS := CreateSampleSalesDataSet;
+          Rep := TBVReport.Create(DS);
+          Rep.Title(Greek + ' (2026)').Author(Greek).Columns(['customer:Customer']);
+          PdfContent := Rep.GeneratePDF;
+          IsAscii := False;
+          OffsetsOk := False;
+          asm
+            IsAscii = !new RegExp('[^\\x00-\\x7F]').test(PdfContent);
+            var offset = parseInt(PdfContent.substring(PdfContent.lastIndexOf('startxref') + 10), 10);
+            OffsetsOk = PdfContent.substr(offset, 4) === 'xref';
+          end;
+          Expect(IsAscii).ToBe(True);
+          Expect(OffsetsOk).ToBe(True);
+          Expect(Pos('/Subtype /Type0', PdfContent) > 0).ToBe(True);
+          Expect(Pos('/Encoding /Identity-H', PdfContent) > 0).ToBe(True);
+          Expect(Pos('/FontFile2', PdfContent) > 0).ToBe(True);
+          Expect(Pos('/ToUnicode', PdfContent) > 0).ToBe(True);
+          Expect(Pos('/BaseFont /Helvetica', PdfContent) > 0).ToBe(False);
+          Expect(Pos('/Title <FEFF0391', PdfContent) > 0).ToBe(True);
+          Expect(Pos(') Tj', PdfContent) > 0).ToBe(False);
+          Expect(Pos(' Tj', PdfContent) > 0).ToBe(True);
+        end);
+
       // 3. Native Vector PDF 1.4 Generation & Multi-Page Pagination
       It('should generate valid native Vector PDF 1.4 documents with pagination, headers, footers and xref table', procedure
         var
