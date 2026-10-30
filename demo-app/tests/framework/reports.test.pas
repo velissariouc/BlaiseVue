@@ -179,6 +179,81 @@ begin
           Expect(Pos('%%EOF', PdfContent) > 0).ToBe(True);
         end);
 
+      // 4a. Downloaded Excel file is a real Office Open XML (.xlsx) ZIP package
+      It('should package Excel exports as a real .xlsx ZIP with workbook, styles and typed sheet parts', procedure
+        var
+          DS: TBVDataSet;
+          Rep: TBVReport;
+          Pkg: JSValue;
+          Sig, PkgText: string;
+        begin
+          DS := CreateSampleSalesDataSet;
+          Rep := TBVReport.Create(DS);
+          Rep.Title('Q4/Accounting: [Sheet]')
+             .Company('BlaiseVue Corp')
+             .Columns(['id:ID:integer', 'customer:Customer', 'total:Amount:currency', 'paid:Paid'])
+             .AddSummary('Grand Total', 'total', aggSum, 'currency');
+
+          Pkg := Rep.GenerateXlsx;
+          Sig := '';
+          PkgText := '';
+          asm
+            Sig = Array.prototype.slice.call(Pkg, 0, 4).join(',');
+            PkgText = new TextDecoder().decode(Pkg);
+          end;
+
+          Expect(Sig).ToBe('80,75,3,4');
+          Expect(Pos('[Content_Types].xml', PkgText) > 0).ToBe(True);
+          Expect(Pos('xl/workbook.xml', PkgText) > 0).ToBe(True);
+          Expect(Pos('xl/styles.xml', PkgText) > 0).ToBe(True);
+          Expect(Pos('xl/worksheets/sheet1.xml', PkgText) > 0).ToBe(True);
+
+          // Sheet names may not contain : / [ ]
+          Expect(Pos('<sheet name="Q4 Accounting   Sheet"', PkgText) > 0).ToBe(True);
+
+          // Typed cells and XML escaping
+          Expect(Pos('<v>1250.5</v>', PkgText) > 0).ToBe(True);
+          Expect(Pos('<v>101</v>', PkgText) > 0).ToBe(True);
+          Expect(Pos('Initech &quot;Labs&quot; &amp; Co', PkgText) > 0).ToBe(True);
+          Expect(Pos('<?mso-application', PkgText) > 0).ToBe(False);
+        end);
+
+      // 4b. Inside a Capacitor app, exports go through Filesystem and Share instead of a Blob link
+      It('should save exports with Capacitor Filesystem on native mobile platforms', procedure
+        var
+          DS: TBVDataSet;
+          Rep: TBVReport;
+          SavedPath, SavedData, SavedDir: string;
+        begin
+          SavedPath := '';
+          SavedData := '';
+          SavedDir := '';
+          asm
+            window.Capacitor = {
+              isNativePlatform: function () { return true; },
+              Plugins: {
+                Filesystem: { writeFile: function (o) {
+                  SavedPath = o.path; SavedData = o.data; SavedDir = o.directory;
+                  return Promise.resolve({ uri: 'file:///cache/' + o.path });
+                } },
+                Share: { share: function () { return Promise.resolve({}); } }
+              }
+            };
+          end;
+          DS := CreateSampleSalesDataSet;
+          Rep := TBVReport.Create(DS);
+          Rep.Title('Mobile Export').Columns(['id:ID:integer', 'customer:Customer']);
+          Rep.ExportExcel('sales/q4.xlsx');
+          asm
+            delete window.Capacitor;
+          end;
+
+          Expect(SavedPath).ToBe('sales_q4.xlsx');
+          Expect(SavedDir).ToBe('DOCUMENTS');
+          // Base64 of the ZIP signature "PK"
+          Expect(Pos('UEs', SavedData) = 1).ToBe(True);
+        end);
+
       // 4. Native Excel (.xlsx / SpreadsheetML) Export with Typed Cells & Styles
       It('should generate native Excel SpreadsheetML with strongly typed Number/String/Boolean cells and currency styles', procedure
         var
