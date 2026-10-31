@@ -30,7 +30,7 @@ my-app/
 │   ├── views/             # Page tests (lifecycle, validation, user flows)
 │   │   ├── Home.test.pas
 │   │   └── DatasetView.test.pas
-│   ├── unit/              # Pure Pascal unit tests (business logic, calculations)
+│   ├── services/          # Pure Pascal domain service tests (business logic, calculations)
 │   │   ├── CalculadoraFrete.test.pas
 │   │   └── Formatters.test.pas
 │   ├── framework/         # Internal framework verification tests
@@ -76,8 +76,8 @@ The BlaiseVue CLI (`bv create`) scaffolds an enterprise-ready 4-tier testing hie
 2. **`tests/views/`**:
    - Automatically populated by `bv new view <Name>`.
    - Tests entire pages, user interaction flows, modal toggles, and form submissions.
-3. **`tests/unit/`**:
-   - Created with `bv new test <Name>` for pure business logic.
+3. **`tests/services/`**:
+   - Automatically populated by `bv new service <Name>` and `bv new test <Name>` for pure business logic and services.
    - Tests classes, calculation engines, and service units without requiring DOM rendering.
 4. **`tests/framework/`**:
    - BlaiseVue core subsystem verification (Reactivity, Routing, DataSet, RPC, Transitions).
@@ -96,7 +96,7 @@ Houses local and installed packages (such as `blaise-themes`, `blaise-icons`, or
 
 **Never edit files in this folder manually.** They are rebuilt automatically during `bv run dev`, `bv run build`, or `bv test`.
 - All `.bv` files are converted into standard Object Pascal units (`u<Name>.pas`).
-- During `bv test`, Pascal test suites are compiled into `generated/tests/` preserving subfolder organization (`components/`, `views/`, `unit/`, `framework/`).
+- During `bv test`, Pascal test suites are compiled into `generated/tests/` preserving subfolder organization (`components/`, `views/`, `services/`, `framework/`).
 
 ---
 
