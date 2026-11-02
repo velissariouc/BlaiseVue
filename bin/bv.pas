@@ -48,13 +48,20 @@ uses
 {$ENDIF}
   SysUtils, Classes, StrUtils, DateUtils, Process, Sockets,
 
-  fphttpclient, openssl, zipper, fpjson, jsonparser;
+  fphttpclient, openssl, opensslsockets, zipper, fpjson, jsonparser;
 
 
 
 // =====================================================================
 
 function ReadFileToString(const FileName: string): string; forward;
+function GetCliVersion: string; forward;
+function GetCliMajorMinor: string; forward;
+procedure SyncMonorepoVersions(const TargetVer: string); forward;
+function GetPas2JSPackagesRoot: string; forward;
+function GetPas2JSPackageDescription(const PkgName: string): string; forward;
+function ResolvePas2JSPackagePath(const PkgName: string; out ResolvedPath: string): Boolean; forward;
+function ListAvailablePas2JSPackages: TStringList; forward;
 
 
 
@@ -217,14 +224,58 @@ end;
 
 
 
+{ Returns the user-level global configuration directory (~/.blaisevue) }
+function GetUserBlaiseVueDir: string;
+var
+  HomeDir: string;
+begin
+  {$IFDEF MSWINDOWS}
+  HomeDir := GetEnvironmentVariable('USERPROFILE');
+  if HomeDir = '' then HomeDir := GetEnvironmentVariable('APPDATA');
+  {$ELSE}
+  HomeDir := GetEnvironmentVariable('HOME');
+  {$ENDIF}
+  if HomeDir = '' then HomeDir := GetCurrentDir;
+  Result := IncludeTrailingPathDelimiter(HomeDir) + '.blaisevue';
+  ForceDirectories(Result);
+end;
+
+{ Returns the user-level global packages directory (~/.blaisevue/packages/) }
+function GetGlobalPackagesPath: string;
+begin
+  Result := GetUserBlaiseVueDir + DirectorySeparator + 'packages' + DirectorySeparator;
+  ForceDirectories(Result);
+end;
+
 { Returns the path to the framework official packages folder }
 
 function GetPackagesPath: string;
 
 begin
 
-  Result := GetSDKPath + 'packages' + DirectorySeparator;
+  if DirectoryExists(GetSDKPath + 'packages' + DirectorySeparator + 'core') then
+    Result := GetSDKPath + 'packages' + DirectorySeparator + 'core' + DirectorySeparator
+  else
+    Result := GetSDKPath + 'packages' + DirectorySeparator;
 
+end;
+
+{ Returns the user-level global tools directory (~/.blaisevue/tools/) }
+function GetGlobalToolsPath: string;
+begin
+  Result := GetUserBlaiseVueDir + DirectorySeparator + 'tools' + DirectorySeparator;
+  ForceDirectories(Result);
+end;
+
+{ Returns the framework built-in tools directory (packages/tools/) }
+function GetBuiltinToolsPath: string;
+begin
+  if DirectoryExists(GetSDKPath + 'packages' + DirectorySeparator + 'tools') then
+    Result := GetSDKPath + 'packages' + DirectorySeparator + 'tools' + DirectorySeparator
+  else if DirectoryExists(GetSDKPath + 'tools') then
+    Result := GetSDKPath + 'tools' + DirectorySeparator
+  else
+    Result := GetSDKPath;
 end;
 
 
@@ -318,6 +369,106 @@ begin
 end;
 
 
+
+{ Returns the packages root directory for pas2js packages }
+function GetPas2JSPackagesRoot: string;
+var
+  OSFolder: string;
+begin
+  {$IFDEF WINDOWS}
+    OSFolder := 'pas2js-win64-x86_64-3.2.0';
+  {$ELSE}
+    {$IFDEF LINUX}
+      OSFolder := 'pas2js-linux-x86_64-3.2.0';
+    {$ELSE}
+      OSFolder := 'pas2js-darwin-x86_64-3.2.0';
+    {$ENDIF}
+  {$ENDIF}
+  Result := GetPas2JSRoot + OSFolder + DirectorySeparator + 'packages' + DirectorySeparator;
+end;
+
+{ Returns human-readable description for known Pas2JS built-in packages }
+function GetPas2JSPackageDescription(const PkgName: string): string;
+var
+  Key: string;
+begin
+  Key := LowerCase(Trim(PkgName));
+  if Key = 'rtl' then Result := 'Core Runtime Library (System, Classes, JS, Web)'
+  else if Key = 'fcl-base' then Result := 'Base FCL utilities (Contnrs, IniFiles, CustApp, EventLog)'
+  else if Key = 'fcl-db' then Result := 'Legacy database architecture (DB, MemDataset, BufDataset)'
+  else if Key = 'fcl-json' then Result := 'Classic FPC JSON parsing & formatting (fpjson, jsonparser)'
+  else if Key = 'fcl-rpc' then Result := 'Remote Procedure Call & JSON-RPC primitives'
+  else if Key = 'chartjs' then Result := 'Official Pas2JS Chart.js HTML5 canvas visualizer bindings'
+  else if Key = 'jspdf' then Result := 'Client-side PDF document generation library'
+  else if Key = 'pdfjs' then Result := 'Mozilla PDF.js client-side document rendering library'
+  else if Key = 'fpcunit' then Result := 'Standard Pascal xUnit unit-testing framework'
+  else if Key = 'datatables' then Result := 'JQuery DataTables interactive grid integration'
+  else if Key = 'bootstrap' then Result := 'Twitter Bootstrap JS component bindings'
+  else if Key = 'bulma' then Result := 'Bulma CSS interactive component bindings'
+  else if Key = 'flatpickr' then Result := 'Lightweight and powerful datetime picker wrapper'
+  else if Key = 'fullcalendar' then Result := 'FullCalendar interactive event calendar wrapper'
+  else if Key = 'tinyeditor' then Result := 'WYSIWYG rich text editor integration'
+  else if Key = 'wasi' then Result := 'WebAssembly System Interface (WASI) runtime bindings'
+  else if Key = 'wasm-utils' then Result := 'Low-level WebAssembly memory & module helpers'
+  else if Key = 'wasm-oi' then Result := 'WebAssembly Object Interface helpers'
+  else if Key = 'xterm' then Result := 'Full-featured Xterm.js terminal emulator component'
+  else if Key = 'zenfs' then Result := 'ZenFS in-memory & browser-backed virtual file system'
+  else if Key = 'webwidget' then Result := 'Pas2JS WebWidget visual component framework'
+  else if Key = 'electron' then Result := 'Electron desktop shell API bindings'
+  else if Key = 'nodejs' then Result := 'Node.js core runtime & system API bindings'
+  else if Key = 'vscode' then Result := 'Visual Studio Code Extension API bindings'
+  else if Key = 'atom' then Result := 'GitHub Atom text editor integration'
+  else if Key = 'firebase' then Result := 'Google Firebase real-time database SDK bindings'
+  else if Key = 'pushjs' then Result := 'Desktop push notification wrapper'
+  else if Key = 'opentok' then Result := 'Vonage OpenTok WebRTC video streaming SDK'
+  else if Key = 'kurento' then Result := 'Kurento WebRTC media server client bindings'
+  else if Key = 'jitsimeet' then Result := 'Jitsi Meet video conferencing embed wrapper'
+  else Result := 'Pas2JS official package';
+end;
+
+{ Resolves a pas2js:<pkg> or <pkg> name to its compiled unit source directory }
+function ResolvePas2JSPackagePath(const PkgName: string; out ResolvedPath: string): Boolean;
+var
+  CleanName, BaseDir, Cand: string;
+begin
+  Result := False;
+  ResolvedPath := '';
+  CleanName := Trim(PkgName);
+  if StartsText('pas2js:', CleanName) then
+    CleanName := Copy(CleanName, 8, Length(CleanName) - 7);
+
+  BaseDir := GetPas2JSPackagesRoot + CleanName;
+  if DirectoryExists(BaseDir) then
+  begin
+    Cand := BaseDir + DirectorySeparator + 'src';
+    if DirectoryExists(Cand) then
+      ResolvedPath := Cand
+    else
+      ResolvedPath := BaseDir;
+    Result := True;
+  end;
+end;
+
+{ Scans packages/ and returns a sorted stringlist of all available Pas2JS packages }
+function ListAvailablePas2JSPackages: TStringList;
+var
+  SR: TSearchRec;
+  PkgRoot: string;
+begin
+  Result := TStringList.Create;
+  PkgRoot := GetPas2JSPackagesRoot;
+  if DirectoryExists(PkgRoot) and (FindFirst(PkgRoot + '*', faDirectory, SR) = 0) then
+  begin
+    repeat
+      if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+      begin
+        Result.Add(SR.Name);
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+  Result.Sort;
+end;
 
 function GetRTLPath: string;
 
@@ -790,11 +941,19 @@ procedure ScanDirForJS(const Path: string; List: TStringList); forward;
 
 procedure ScanDirForTests(const Path: string; List: TStringList); forward;
 
-procedure CmdLibList; forward;
-
-procedure CmdLibInstall(const URL: string); forward;
-
-procedure CmdLibRemove(const LibName: string); forward;
+function GetReposConfigPath: string; forward;
+function LoadReposRegistry(out RootObj: TJSONObject): Boolean; forward;
+procedure GetOrderedRepoNames(out RepoNames: TStringList); forward;
+function IsReservedCorePackageName(const Name: string): Boolean; forward;
+function FindPackageInEcosystem(const PkgName: string; const ReqVersion: string;
+  out FoundVersion, DownloadURL, Checksum, RepoName: string; const TargetRepo: string = ''): Boolean; forward;
+procedure CmdRepoSync; forward;
+procedure CmdLibList(IsGlobal: Boolean = False); forward;
+procedure CmdLibInstall(const TargetArg: string; IsGlobal: Boolean = False); forward;
+procedure CmdLibRemove(const LibName: string; IsGlobal: Boolean = False); forward;
+procedure CmdLibUpdate(const LibName: string = ''; IsGlobal: Boolean = False); forward;
+procedure CmdLibOutdated(IsGlobal: Boolean = False); forward;
+procedure CmdLibSearch(const Query: string); forward;
 procedure CmdCreateLib(const LibName: string; const SelectedLicense: string); forward;
 procedure CmdLibPack(const TargetDir: string; SkipTests: Boolean); forward;
 
@@ -813,13 +972,20 @@ procedure CmdTestE2E; forward;
 procedure CmdStudio; forward;
 
 procedure CmdCheck(const TargetFile: string); forward;
+function FormatBVContent(const AContent: string): string; forward;
+procedure CmdFormat(const TargetFile: string; CheckOnly: Boolean = False); forward;
 procedure CmdLicense; forward;
 procedure CmdMeta; forward;
+procedure CmdPath; forward;
+procedure CmdLazarus; forward;
 procedure CmdReset; forward;
 procedure CmdUpdate; forward;
 procedure CmdDoctor; forward;
 procedure CmdSelfUpdate(const ChannelOverride: string = ''); forward;
 procedure CmdChannel; forward;
+procedure CmdRemoveMobile(ForceFlag: Boolean); forward;
+procedure CmdRemoveDesktop(ForceFlag: Boolean); forward;
+procedure CmdRepo; forward;
 function CockpitReadLine(out S: string): Boolean; forward;
 
 
@@ -3199,6 +3365,14 @@ var
   NormalizedLic: string;
   PkgJson, BvComp, PasUnit, CssStyle, DemoHtml, DemoApp, UnitTest, Readme: string;
 begin
+  if IsReservedCorePackageName(LibName) then
+  begin
+    WriteLn('ERROR: Cannot create library with reserved name "' + LibName + '".');
+    WriteLn('Names starting with "blaise-" and core names (ui, themes, icons, charts, reports, studio, mobile, core, sdk, tools) are reserved for official BlaiseVue framework components.');
+    WriteLn('Please choose another name (e.g. "my-' + LibName + '").');
+    Halt(1);
+  end;
+
   Base := GetCurrentDir + DirectorySeparator + LibName + DirectorySeparator;
 
   if DirectoryExists(Base) then
@@ -4794,6 +4968,10 @@ begin
 
           ((i <= Length(Tpl) - 7) and (Copy(Tpl, i, 7) = 'v-model')) or
 
+          ((i <= Length(Tpl) - 9) and (Copy(Tpl, i, 9) = 'b-else-if')) or
+
+          ((i <= Length(Tpl) - 9) and (Copy(Tpl, i, 9) = 'v-else-if')) or
+
           ((i <= Length(Tpl) - 4) and (Copy(Tpl, i, 4) = 'b-if')) or
 
           ((i <= Length(Tpl) - 4) and (Copy(Tpl, i, 4) = 'v-if')) or
@@ -4801,6 +4979,14 @@ begin
           ((i <= Length(Tpl) - 6) and (Copy(Tpl, i, 6) = 'b-show')) or
 
           ((i <= Length(Tpl) - 6) and (Copy(Tpl, i, 6) = 'v-show')) or
+
+          ((i <= Length(Tpl) - 7) and (Copy(Tpl, i, 7) = 'b-bind:')) or
+
+          ((i <= Length(Tpl) - 7) and (Copy(Tpl, i, 7) = 'v-bind:')) or
+
+          ((i <= Length(Tpl) - 10) and (Copy(Tpl, i, 10) = 'b-validate')) or
+
+          ((i <= Length(Tpl) - 10) and (Copy(Tpl, i, 10) = 'v-validate')) or
 
           ((i <= Length(Tpl) - 7) and (Copy(Tpl, i, 7) = 'b-field'))) then
 
@@ -4991,15 +5177,322 @@ begin
       WriteLn('Result: All ', BVFiles.Count, ' component(s) passed AST type-verification with 0 errors.')
 
     else
-
       WriteLn('Result: Verification completed with ', TotalWarnings, ' template warning(s).');
-
   finally
-
     BVFiles.Free;
+  end;
+end;
 
+function FormatBVContent(const AContent: string): string;
+var
+  InLines, OutLines: TStringList;
+  i: Integer;
+  Line, Trimmed, LowTrim: string;
+  Section: Integer; // 0=none, 1=template, 2=script, 3=style
+  TmplIndent: Integer;
+  InMethodBody: Boolean;
+  StyleIndent: Integer;
+  LastEmpty: Boolean;
+
+  function CountUnclosedTags(const S: string): Integer;
+  var
+    P, TagStart, TagEnd: Integer;
+    Tag: string;
+    Balance: Integer;
+    InQuotes: Boolean;
+    QuoteChar: Char;
+  begin
+    Balance := 0;
+    P := 1;
+    while P <= Length(S) do
+    begin
+      if (S[P] = '<') and (P < Length(S)) then
+      begin
+        if Copy(S, P, 4) = '<!--' then
+        begin
+          P := Pos('-->', S);
+          if P = 0 then P := Length(S) + 1 else Inc(P, 3);
+          Continue;
+        end;
+
+        TagStart := P;
+        InQuotes := False;
+        QuoteChar := #0;
+        Inc(P);
+        while (P <= Length(S)) do
+        begin
+          if S[P] in ['"', ''''] then
+          begin
+            if not InQuotes then begin InQuotes := True; QuoteChar := S[P]; end
+            else if S[P] = QuoteChar then InQuotes := False;
+          end
+          else if (S[P] = '>') and not InQuotes then Break;
+          Inc(P);
+        end;
+        TagEnd := P;
+        Tag := Copy(S, TagStart, TagEnd - TagStart + 1);
+
+        if (Length(Tag) >= 2) then
+        begin
+          if Copy(Tag, 1, 2) = '</' then
+            Dec(Balance)
+          else if (Copy(Tag, Length(Tag) - 1, 2) = '/>') or
+                  (Copy(LowerCase(Tag), 1, 3) = '<br') or
+                  (Copy(LowerCase(Tag), 1, 3) = '<hr') or
+                  (Copy(LowerCase(Tag), 1, 4) = '<img') or
+                  (Copy(LowerCase(Tag), 1, 6) = '<input') or
+                  ((Copy(LowerCase(Tag), 1, 5) = '<slot') and (Pos('</slot>', LowerCase(S)) = 0)) then
+            // self closing or void
+          else
+            Inc(Balance);
+        end;
+      end;
+      Inc(P);
+    end;
+    Result := Balance;
   end;
 
+begin
+  InLines := TStringList.Create;
+  OutLines := TStringList.Create;
+  try
+    InLines.Text := AContent;
+    Section := 0;
+    TmplIndent := 1;
+    InMethodBody := False;
+    StyleIndent := 1;
+    LastEmpty := False;
+
+    for i := 0 to InLines.Count - 1 do
+    begin
+      Line := InLines[i];
+      Trimmed := Trim(Line);
+      LowTrim := LowerCase(Trimmed);
+
+      if Trimmed = '' then
+      begin
+        if not LastEmpty and (OutLines.Count > 0) then
+        begin
+          OutLines.Add('');
+          LastEmpty := True;
+        end;
+        Continue;
+      end;
+      LastEmpty := False;
+
+      if Pos('<template', LowTrim) = 1 then
+      begin
+        Section := 1;
+        TmplIndent := 1;
+        OutLines.Add(Trimmed);
+      end
+      else if Pos('</template>', LowTrim) = 1 then
+      begin
+        Section := 0;
+        OutLines.Add('</template>');
+        OutLines.Add('');
+        LastEmpty := True;
+      end
+      else if Pos('<script', LowTrim) = 1 then
+      begin
+        Section := 2;
+        InMethodBody := False;
+        OutLines.Add(Trimmed);
+      end
+      else if Pos('</script>', LowTrim) = 1 then
+      begin
+        Section := 0;
+        OutLines.Add('</script>');
+        OutLines.Add('');
+        LastEmpty := True;
+      end
+      else if Pos('<style', LowTrim) = 1 then
+      begin
+        Section := 3;
+        StyleIndent := 1;
+        OutLines.Add(Trimmed);
+      end
+      else if Pos('</style>', LowTrim) = 1 then
+      begin
+        Section := 0;
+        OutLines.Add('</style>');
+      end
+      else
+      begin
+        case Section of
+          1: // Template
+          begin
+            if Copy(Trimmed, 1, 2) = '</' then
+            begin
+              if TmplIndent > 1 then Dec(TmplIndent);
+              OutLines.Add(StringOfChar(' ', TmplIndent * 2) + Trimmed);
+            end
+            else
+            begin
+              OutLines.Add(StringOfChar(' ', TmplIndent * 2) + Trimmed);
+              Inc(TmplIndent, CountUnclosedTags(Trimmed));
+              if TmplIndent < 1 then TmplIndent := 1;
+            end;
+          end;
+
+          2: // Script
+          begin
+            if (LowTrim = 'props:') or (LowTrim = 'data:') or (LowTrim = 'computed:') or
+               (LowTrim = 'watch:') or (LowTrim = 'methods:') or (LowTrim = 'created:') or
+               (LowTrim = 'mounted:') or (LowTrim = 'updated:') or (LowTrim = 'unmounted:') or
+               (LowTrim = 'provide:') or (LowTrim = 'inject:') or (LowTrim = 'routes:') then
+            begin
+              InMethodBody := False;
+              OutLines.Add('  ' + Trimmed);
+            end
+            else if (Pos('procedure ', LowTrim) = 1) or (Pos('function ', LowTrim) = 1) then
+            begin
+              InMethodBody := False;
+              OutLines.Add('    ' + Trimmed);
+            end
+            else if (LowTrim = 'var') or (LowTrim = 'const') then
+            begin
+              InMethodBody := False;
+              OutLines.Add('    ' + Trimmed);
+            end
+            else if (LowTrim = 'begin') then
+            begin
+              OutLines.Add('    begin');
+              InMethodBody := True;
+            end
+            else if (LowTrim = 'end;') or (LowTrim = 'end') then
+            begin
+              InMethodBody := False;
+              OutLines.Add('    ' + Trimmed);
+            end
+            else if InMethodBody then
+            begin
+              OutLines.Add('      ' + Trimmed);
+            end
+            else
+            begin
+              OutLines.Add('    ' + Trimmed);
+            end;
+          end;
+
+          3: // Style
+          begin
+            if (Pos('{', Trimmed) > 0) and (Pos('}', Trimmed) > 0) then
+            begin
+              OutLines.Add('  ' + Trimmed);
+            end
+            else if Pos('{', Trimmed) > 0 then
+            begin
+              OutLines.Add('  ' + Trimmed);
+              StyleIndent := 2;
+            end
+            else if Pos('}', Trimmed) = 1 then
+            begin
+              OutLines.Add('  }');
+              StyleIndent := 1;
+            end
+            else
+            begin
+              OutLines.Add(StringOfChar(' ', StyleIndent * 2) + Trimmed);
+            end;
+          end;
+
+          else
+            OutLines.Add(Trimmed);
+        end;
+      end;
+    end;
+
+    Result := OutLines.Text;
+  finally
+    InLines.Free;
+    OutLines.Free;
+  end;
+end;
+
+procedure CmdFormat(const TargetFile: string; CheckOnly: Boolean = False);
+var
+  BVFiles: TStringList;
+  i, FormattedCount: Integer;
+  FilePath, OrigContent, FormattedContent: string;
+begin
+  if (LowerCase(TargetFile) = '--help') or (LowerCase(TargetFile) = '-h') or (LowerCase(TargetFile) = 'help') then
+  begin
+    WriteLn('Usage: bv format [file_or_dir] [--check]');
+    WriteLn('');
+    WriteLn('Options:');
+    WriteLn('  [file_or_dir]   Target .bv component file or directory (defaults to src/ and lib/)');
+    WriteLn('  --check         Verify if files are formatted without modifying them');
+    WriteLn('  -h, --help      Show this help message');
+    Exit;
+  end;
+
+  BVFiles := TStringList.Create;
+  try
+    if (TargetFile <> '') and (TargetFile <> '--check') then
+    begin
+      if FileExists(TargetFile) then
+        BVFiles.Add(TargetFile)
+      else if DirectoryExists(TargetFile) then
+        ScanDirForBV(TargetFile, BVFiles)
+      else
+      begin
+        WriteLn('  [ERROR] File or directory not found: ' + TargetFile);
+        Halt(1);
+      end;
+    end
+    else
+    begin
+      if FileExists(GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'app.bv') then
+        BVFiles.Add(GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'app.bv');
+      ScanDirForBV(GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'components', BVFiles);
+      ScanDirForBV(GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'views', BVFiles);
+      ScanDirForBV(GetCurrentDir + DirectorySeparator + 'lib', BVFiles);
+    end;
+
+    if BVFiles.Count = 0 then
+    begin
+      WriteLn('  [INFO] No .bv components found to format.');
+      Exit;
+    end;
+
+    FormattedCount := 0;
+    WriteLn('  [FORMAT] Processing ' + IntToStr(BVFiles.Count) + ' component(s)...');
+    for i := 0 to BVFiles.Count - 1 do
+    begin
+      FilePath := BVFiles[i];
+      OrigContent := ReadFileToString(FilePath);
+      FormattedContent := FormatBVContent(OrigContent);
+      if OrigContent <> FormattedContent then
+      begin
+        Inc(FormattedCount);
+        if CheckOnly then
+          WriteLn('    [!] Needs formatting: ' + FilePath)
+        else
+        begin
+          WriteStringToFile(FilePath, FormattedContent);
+          WriteLn('    [*] Formatted: ' + FilePath);
+        end;
+      end;
+    end;
+
+    if CheckOnly then
+    begin
+      if FormattedCount > 0 then
+      begin
+        WriteLn('  [FAIL] ' + IntToStr(FormattedCount) + ' file(s) need formatting.');
+        Halt(1);
+      end
+      else
+        WriteLn('  [OK] All files are properly formatted.');
+    end
+    else
+    begin
+      WriteLn('  [SUCCESS] Formatted ' + IntToStr(FormattedCount) + ' of ' + IntToStr(BVFiles.Count) + ' file(s).');
+    end;
+  finally
+    BVFiles.Free;
+  end;
 end;
 
 
@@ -6297,296 +6790,270 @@ end;
 
 
 
-procedure CmdLibList;
-
+function GetCorePackageFolder(const Name: string): string;
 var
-
-  SR: TSearchRec;
-
-  Path: string;
-
-  Extra: string;
-
+  L: string;
 begin
+  L := LowerCase(Trim(Name));
+  if (L = 'themes') or (L = 'blaise-themes') then Result := GetPackagesPath + 'blaise-themes'
+  else if (L = 'icons') or (L = 'blaise-icons') then Result := GetPackagesPath + 'blaise-icons'
+  else if (L = 'ui') or (L = 'blaise-ui') then Result := GetPackagesPath + 'blaise-ui'
+  else if (L = 'mobile') or (L = 'blaise-ui-mobile') then Result := GetPackagesPath + 'blaise-ui-mobile'
+  else if (L = 'charts') or (L = 'blaise-charts') then Result := GetPackagesPath + 'blaise-charts'
+  else if (L = 'reports') or (L = 'blaise-reports') then Result := GetPackagesPath + 'blaise-reports'
+  else if (L = 'studio') or (L = 'blaise-studio') then Result := GetPackagesPath + 'blaise-studio'
+  else if DirectoryExists(GetPackagesPath + L) then Result := GetPackagesPath + L
+  else Result := '';
+end;
 
-  Path := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator;
-
-  WriteLn('');
-
-  WriteLn('Installed Libs in /lib:');
-
-  WriteLn(StringOfChar('-', 40));
-
-  if FindFirst(Path + '*', faDirectory, SR) = 0 then
-
+function GetPackageVersionFromFolder(const FolderPath: string): string;
+var
+  JsonFile, Raw, BaseName, CoreDir: string;
+  Parser: TJSONParser;
+  Data: TJSONData;
+begin
+  Result := '';
+  JsonFile := IncludeTrailingPathDelimiter(FolderPath) + 'package.json';
+  if FileExists(JsonFile) then
   begin
-
-    repeat
-
-      if (SR.Name <> '.') and (SR.Name <> '..') then
-
-      begin
-
-        Extra := '';
-
-        if FileExists(Path + SR.Name + DirectorySeparator + 'setup.pas') then
-
-          Extra := ' [Scripted]';
-
-        WriteLn('  - ', SR.Name, Extra);
-
+    Raw := ReadFileToString(JsonFile);
+    if Trim(Raw) <> '' then
+    begin
+      try
+        Parser := TJSONParser.Create(Raw, True);
+        try
+          Data := Parser.Parse;
+          if Assigned(Data) and (Data.JSONType = jtObject) then
+            Result := TJSONObject(Data).Get('version', '');
+          if Assigned(Data) then Data.Free;
+        finally
+          Parser.Free;
+        end;
+      except
       end;
-
-    until FindNext(SR) <> 0;
-
-    FindClose(SR);
-
+    end;
   end;
 
-  WriteLn(StringOfChar('-', 40));
-
-end;
-
-
-
-procedure CmdLibRemove(const LibName: string);
-
-var
-
-  Path: string;
-
-begin
-
-  Path := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator + LibName;
-
-  if DirectoryExists(Path) then
-
+  if Result = '' then
   begin
-
-    if FileExists(Path + DirectorySeparator + 'setup.pas') then
-
+    BaseName := ExtractFileName(ExcludeTrailingPathDelimiter(FolderPath));
+    CoreDir := GetCorePackageFolder(BaseName);
+    if (CoreDir <> '') and DirectoryExists(CoreDir) then
     begin
-
-       WriteLn('Detected setup script. Running cleanup...');
-
-       RunSetupScript(LibName, 'remove');
-
+      JsonFile := IncludeTrailingPathDelimiter(CoreDir) + 'package.json';
+      if FileExists(JsonFile) then
+      begin
+        Raw := ReadFileToString(JsonFile);
+        if Trim(Raw) <> '' then
+        begin
+          try
+            Parser := TJSONParser.Create(Raw, True);
+            try
+              Data := Parser.Parse;
+              if Assigned(Data) and (Data.JSONType = jtObject) then
+                Result := TJSONObject(Data).Get('version', '');
+              if Assigned(Data) then Data.Free;
+            finally
+              Parser.Free;
+            end;
+          except
+          end;
+        end;
+      end;
+      if Result = '' then
+        Result := '4.4.0';
     end;
-
-    DeleteDir(Path);
-
-    WriteLn('Library "', LibName, '" removed.');
-
-  end
-
-  else
-
-    WriteLn('Error: Library "', LibName, '" not found in /lib.');
-
+  end;
 end;
 
-
-
-procedure CmdLibInstall(const URL: string);
-
+procedure ExtractZipSmart(const ZipFile, DestBaseDir, PkgName: string);
 var
-
-  LibPath, ZipName, AliasLower: string;
-
-  PkgSource, DownloadURL: string;
-
-  Client: TFPHTTPClient;
-
   UnZipper: TUnZipper;
-
+  HasTopFolder: Boolean;
+  i: Integer;
+  EntryName, FinalDest: string;
 begin
+  ForceDir(DestBaseDir);
+  UnZipper := TUnZipper.Create;
+  try
+    UnZipper.FileName := ZipFile;
+    UnZipper.Examine;
+    HasTopFolder := True;
+    for i := 0 to UnZipper.Entries.Count - 1 do
+    begin
+      EntryName := UnZipper.Entries[i].ArchiveFileName;
+      if (not StartsText(PkgName + '/', EntryName)) and 
+         (not StartsText(PkgName + '\', EntryName)) then
+      begin
+        HasTopFolder := False;
+        Break;
+      end;
+    end;
+    
+    if HasTopFolder then
+    begin
+      UnZipper.OutputPath := DestBaseDir;
+    end
+    else
+    begin
+      FinalDest := IncludeTrailingPathDelimiter(DestBaseDir) + PkgName + DirectorySeparator;
+      ForceDir(FinalDest);
+      UnZipper.OutputPath := FinalDest;
+    end;
+    
+    UnZipper.UnZipAllFiles;
+  finally
+    UnZipper.Free;
+  end;
+end;
 
-  AliasLower := LowerCase(Trim(URL));
+function IsOfficialCorePackage(const Name: string): Boolean;
+var
+  L: string;
+begin
+  L := LowerCase(Trim(Name));
+  Result := (L = 'themes') or (L = 'blaise-themes') or
+            (L = 'icons') or (L = 'blaise-icons') or
+            (L = 'ui') or (L = 'blaise-ui') or
+            (L = 'mobile') or (L = 'blaise-ui-mobile') or
+            (L = 'charts') or (L = 'blaise-charts') or
+            (L = 'reports') or (L = 'blaise-reports') or
+            (L = 'studio') or (L = 'blaise-studio') or
+            DirectoryExists(GetPackagesPath + L);
+end;
 
+function IsReservedCorePackageName(const Name: string): Boolean;
+var
+  L: string;
+begin
+  L := LowerCase(Trim(Name));
+  Result := IsOfficialCorePackage(L) or
+            StartsText('blaise-', L) or
+            (L = 'core') or (L = 'sdk') or (L = 'tools') or (L = 'pas2js') or
+            (L = 'framework') or (L = 'std') or (L = 'runtime');
+end;
+
+procedure InstallCorePackage(const Name: string);
+var
+  L, LibPath, PkgSource: string;
+begin
+  L := LowerCase(Trim(Name));
   LibPath := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator;
-
   ForceDir(LibPath);
 
-
-
-  // Check official package aliases
-
-  if (AliasLower = 'themes') or (AliasLower = 'blaise-themes') then
-
+  if (L = 'themes') or (L = 'blaise-themes') then
   begin
-
-    WriteLn('Installing official package: blaise-themes ...');
-
+    WriteLn('Installing official core package: blaise-themes ...');
     PkgSource := GetPackagesPath + 'blaise-themes';
-
     if DirectoryExists(PkgSource) then
-
     begin
-
       CopyDir(PkgSource + DirectorySeparator + 'themes', LibPath + 'themes', []);
-
       if FileExists(PkgSource + DirectorySeparator + 'BVThemeSelect.bv') then
-
         WriteStringToFile(LibPath + 'themes' + DirectorySeparator + 'BVThemeSelect.bv', ReadFileToString(PkgSource + DirectorySeparator + 'BVThemeSelect.bv'));
-
       if FileExists(PkgSource + DirectorySeparator + 'BVThemeToggle.bv') then
-
         WriteStringToFile(LibPath + 'themes' + DirectorySeparator + 'BVThemeToggle.bv', ReadFileToString(PkgSource + DirectorySeparator + 'BVThemeToggle.bv'));
-
+      if FileExists(PkgSource + DirectorySeparator + 'package.json') then
+        WriteStringToFile(LibPath + 'themes' + DirectorySeparator + 'package.json', ReadFileToString(PkgSource + DirectorySeparator + 'package.json'));
       WriteLn('Package "blaise-themes" installed successfully in lib/themes/.');
-
-      Exit;
-
-    end
-
-    else
-
-      DownloadURL := 'https://github.com/blaisevue/blaise-themes/releases/latest/download/blaise-themes.zip';
-
+    end;
   end
-
-  else if (AliasLower = 'icons') or (AliasLower = 'blaise-icons') then
-
+  else if (L = 'icons') or (L = 'blaise-icons') then
   begin
-
-    WriteLn('Installing official package: blaise-icons ...');
-
+    WriteLn('Installing official core package: blaise-icons ...');
     PkgSource := GetPackagesPath + 'blaise-icons';
-
     if DirectoryExists(PkgSource) then
-
     begin
-
       CopyDir(PkgSource + DirectorySeparator + 'css', LibPath + 'icons', []);
-
+      if FileExists(PkgSource + DirectorySeparator + 'package.json') then
+        WriteStringToFile(LibPath + 'icons' + DirectorySeparator + 'package.json', ReadFileToString(PkgSource + DirectorySeparator + 'package.json'));
       WriteLn('Package "blaise-icons" installed successfully in lib/icons/.');
-
-      Exit;
-
-    end
-
-    else
-
-      DownloadURL := 'https://github.com/blaisevue/blaise-icons/releases/latest/download/blaise-icons.zip';
-
+    end;
   end
-
-  else if (AliasLower = 'ui') or (AliasLower = 'blaise-ui') then
-
+  else if (L = 'ui') or (L = 'blaise-ui') then
   begin
-
-    WriteLn('Installing official package: blaise-ui ...');
-
+    WriteLn('Installing official core package: blaise-ui ...');
     PkgSource := GetPackagesPath + 'blaise-ui';
-
     if DirectoryExists(PkgSource) then
-
     begin
-
       CopyDir(PkgSource, LibPath + 'blaise-ui', []);
-
       WriteLn('Package "blaise-ui" installed successfully in lib/blaise-ui/.');
-
-      Exit;
-
-    end
-
-    else
-
-      DownloadURL := 'https://github.com/blaisevue/blaise-ui/releases/latest/download/blaise-ui.zip';
-
+    end;
   end
-
-  else if (AliasLower = 'mobile') or (AliasLower = 'blaise-ui-mobile') then
-
+  else if (L = 'mobile') or (L = 'blaise-ui-mobile') then
   begin
-
-    WriteLn('Installing official package: blaise-ui-mobile ...');
-
+    WriteLn('Installing official core package: blaise-ui-mobile ...');
     PkgSource := GetPackagesPath + 'blaise-ui-mobile';
-
     if DirectoryExists(PkgSource) then
-
     begin
-
       CopyDir(PkgSource, LibPath + 'blaise-ui-mobile', []);
-
       WriteLn('Package "blaise-ui-mobile" installed successfully in lib/blaise-ui-mobile/.');
-
-      Exit;
-
-    end
-
-    else
-
-      DownloadURL := 'https://github.com/blaisevue/blaise-ui-mobile/releases/latest/download/blaise-ui-mobile.zip';
-
+    end;
   end
-
-  else if (AliasLower = 'charts') or (AliasLower = 'blaise-charts') then
-
+  else if (L = 'charts') or (L = 'blaise-charts') then
   begin
-
-    WriteLn('Installing official package: blaise-charts ...');
-
+    WriteLn('Installing official core package: blaise-charts ...');
     PkgSource := GetPackagesPath + 'blaise-charts';
-
     if DirectoryExists(PkgSource) then
-
     begin
-
       CopyDir(PkgSource, LibPath + 'blaise-charts', []);
-
       WriteLn('Package "blaise-charts" installed successfully in lib/blaise-charts/.');
-
-      Exit;
-
-    end
-
-    else
-
-      DownloadURL := 'https://github.com/blaisevue/blaise-charts/releases/latest/download/blaise-charts.zip';
-
+    end;
   end
-
-  else if (AliasLower = 'reports') or (AliasLower = 'blaise-reports') then
-
+  else if (L = 'reports') or (L = 'blaise-reports') then
   begin
-
-    WriteLn('Installing official package: blaise-reports ...');
-
+    WriteLn('Installing official core package: blaise-reports ...');
     PkgSource := GetPackagesPath + 'blaise-reports';
-
     if DirectoryExists(PkgSource) then
-
     begin
-
       CopyDir(PkgSource, LibPath + 'blaise-reports', []);
-
       WriteLn('Package "blaise-reports" installed successfully in lib/blaise-reports/.');
-
-      Exit;
-
-    end
-
-    else
-
-      DownloadURL := 'https://github.com/blaisevue/blaise-reports/releases/latest/download/blaise-reports.zip';
-
+    end;
   end
-
-  else if FileExists(URL) or FileExists(ExpandFileName(URL)) then
+  else if (L = 'studio') or (L = 'blaise-studio') then
   begin
-    PkgSource := URL;
-    if not FileExists(PkgSource) then PkgSource := ExpandFileName(URL);
-    ZipName := LibPath + 'temp_lib.zip';
-    WriteLn('Installing from local archive: ', PkgSource);
-    CopyFile(PkgSource, ZipName);
+    WriteLn('Installing official core package: blaise-studio ...');
+    PkgSource := GetPackagesPath + 'blaise-studio';
+    if DirectoryExists(PkgSource) then
+    begin
+      CopyDir(PkgSource, LibPath + 'blaise-studio', []);
+      WriteLn('Package "blaise-studio" installed successfully in lib/blaise-studio/.');
+    end;
+  end
+  else
+  begin
+    PkgSource := GetPackagesPath + L;
+    if DirectoryExists(PkgSource) then
+    begin
+      CopyDir(PkgSource, LibPath + L, []);
+      WriteLn('Package "' + L + '" installed successfully in lib/' + L + '/.');
+    end
+    else
+      WriteLn('Error: Official package "' + L + '" not found in ' + GetPackagesPath);
+  end;
+end;
+
+procedure InstallDirectArchive(const URL: string; IsGlobal: Boolean);
+var
+  TargetBase, DownloadURL, ZipName: string;
+  Client: TFPHTTPClient;
+  UnZipper: TUnZipper;
+begin
+  if IsGlobal then
+    TargetBase := GetGlobalPackagesPath
+  else
+    TargetBase := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator;
+  ForceDir(TargetBase);
+
+  if FileExists(URL) or FileExists(ExpandFileName(URL)) then
+  begin
+    ZipName := URL;
+    if not FileExists(ZipName) then ZipName := ExpandFileName(URL);
+    WriteLn('Installing from local archive: ', ZipName);
   end
   else
   begin
     DownloadURL := URL;
-    ZipName := LibPath + 'temp_lib.zip';
+    ZipName := TargetBase + 'temp_download.zip';
     WriteLn('Downloading from: ', DownloadURL);
     Client := TFPHTTPClient.Create(nil);
     try
@@ -6601,34 +7068,835 @@ begin
     end;
   end;
 
-  
-
-  WriteLn('Extracting into /lib folder...');
-
+  WriteLn('Extracting to ' + TargetBase + '...');
   UnZipper := TUnZipper.Create;
-
   try
-
     UnZipper.FileName := ZipName;
-
-    UnZipper.OutputPath := LibPath;
-
+    UnZipper.OutputPath := TargetBase;
     UnZipper.Examine;
-
     UnZipper.UnZipAllFiles;
-
   finally
-
     UnZipper.Free;
-
   end;
 
-  
-
-  DeleteFile(ZipName);
+  if (ZipName = TargetBase + 'temp_download.zip') and FileExists(ZipName) then
+    DeleteFile(ZipName);
 
   WriteLn('Installation completed successfully!');
+end;
 
+procedure GetOrderedRepoNames(out RepoNames: TStringList);
+var
+  RootObj, RepoObj: TJSONObject;
+  ReposArr: TJSONArray;
+  i: Integer;
+  RName, DefaultName: string;
+  IsDef: Boolean;
+begin
+  RepoNames := TStringList.Create;
+  DefaultName := '';
+  if LoadReposRegistry(RootObj) then
+  begin
+    try
+      ReposArr := RootObj.Get('repositories', TJSONArray(nil));
+      if Assigned(ReposArr) then
+      begin
+        for i := 0 to ReposArr.Count - 1 do
+        begin
+          if ReposArr.Types[i] = jtObject then
+          begin
+            RepoObj := TJSONObject(ReposArr.Objects[i]);
+            IsDef := RepoObj.Get('default', False);
+            if IsDef then
+            begin
+              DefaultName := RepoObj.Get('name', '');
+              Break;
+            end;
+          end;
+        end;
+        if (DefaultName = '') and (ReposArr.Count > 0) and (ReposArr.Types[0] = jtObject) then
+          DefaultName := TJSONObject(ReposArr.Objects[0]).Get('name', '');
+
+        if DefaultName <> '' then
+          RepoNames.Add(DefaultName);
+
+        for i := 0 to ReposArr.Count - 1 do
+        begin
+          if ReposArr.Types[i] = jtObject then
+          begin
+            RepoObj := TJSONObject(ReposArr.Objects[i]);
+            RName := RepoObj.Get('name', '');
+            if (RName <> '') and (not SameText(RName, DefaultName)) then
+              RepoNames.Add(RName);
+          end;
+        end;
+      end;
+    finally
+      RootObj.Free;
+    end;
+  end;
+
+  if RepoNames.Count = 0 then
+    RepoNames.Add('official');
+end;
+
+function FindPackageInEcosystem(const PkgName: string; const ReqVersion: string;
+  out FoundVersion, DownloadURL, Checksum, RepoName: string; const TargetRepo: string = ''): Boolean;
+var
+  CacheDir, CacheFile, RawJson, PkgKey, CandidateVer, DesiredVer, CurrentRepo: string;
+  Parser: TJSONParser;
+  Data: TJSONData;
+  RootObj, PackagesObj, PkgObj, VerObj: TJSONObject;
+  VersionsArr: TJSONArray;
+  i, j, rIdx: Integer;
+  RepoList, FoundInOtherRepos: TStringList;
+  MatchedInThisRepo: Boolean;
+begin
+  Result := False;
+  FoundVersion := '';
+  DownloadURL := '';
+  Checksum := '';
+  RepoName := '';
+
+  CacheDir := ExtractFileDir(GetReposConfigPath) + DirectorySeparator + 'cache';
+  if not DirectoryExists(CacheDir) then
+    CmdRepoSync;
+
+  RepoList := nil;
+  FoundInOtherRepos := TStringList.Create;
+  try
+    if TargetRepo <> '' then
+    begin
+      RepoList := TStringList.Create;
+      if FileExists(CacheDir + DirectorySeparator + TargetRepo + '-ecosystem.json') then
+        RepoList.Add(TargetRepo)
+      else if SameText(TargetRepo, 'official') or SameText(TargetRepo, 'blaisevue-ecosystem') then
+        RepoList.Add('official')
+      else
+        RepoList.Add(TargetRepo);
+    end
+    else
+      GetOrderedRepoNames(RepoList);
+
+    for rIdx := 0 to RepoList.Count - 1 do
+    begin
+      CurrentRepo := RepoList[rIdx];
+      CacheFile := CacheDir + DirectorySeparator + CurrentRepo + '-ecosystem.json';
+      if not FileExists(CacheFile) then
+        Continue;
+
+      RawJson := ReadFileToString(CacheFile);
+      if Trim(RawJson) = '' then
+        Continue;
+
+      Parser := TJSONParser.Create(RawJson, True);
+      try
+        try
+          Data := Parser.Parse;
+          if Assigned(Data) and (Data.JSONType = jtObject) then
+          begin
+            RootObj := TJSONObject(Data);
+
+            if (not (SameText(CurrentRepo, 'official') or SameText(CurrentRepo, 'blaisevue-ecosystem'))) and IsReservedCorePackageName(PkgName) then
+            begin
+              // Skip hijacked core name from third-party repo
+            end
+            else
+            begin
+              PackagesObj := RootObj.Get('packages', TJSONObject(nil));
+              if Assigned(PackagesObj) then
+              begin
+                for i := 0 to PackagesObj.Count - 1 do
+                begin
+                  PkgKey := PackagesObj.Names[i];
+                  if SameText(PkgKey, PkgName) then
+                  begin
+                    MatchedInThisRepo := False;
+                    PkgObj := TJSONObject(PackagesObj.Items[i]);
+                    DesiredVer := ReqVersion;
+                    if (DesiredVer = '') or SameText(DesiredVer, 'latest') then
+                      DesiredVer := PkgObj.Get('latest', '');
+
+                    VersionsArr := PkgObj.Get('versions', TJSONArray(nil));
+                    if Assigned(VersionsArr) then
+                    begin
+                      for j := 0 to VersionsArr.Count - 1 do
+                      begin
+                        if VersionsArr.Types[j] = jtObject then
+                        begin
+                          VerObj := TJSONObject(VersionsArr.Objects[j]);
+                          CandidateVer := VerObj.Get('version', '');
+                          if (DesiredVer = '') or (CandidateVer = DesiredVer) then
+                          begin
+                            if not Result then
+                            begin
+                              FoundVersion := CandidateVer;
+                              DownloadURL := VerObj.Get('download_url', '');
+                              Checksum := VerObj.Get('checksum', '');
+                              RepoName := RootObj.Get('name', CurrentRepo);
+                              Result := True;
+                              MatchedInThisRepo := True;
+                            end
+                            else
+                            begin
+                              MatchedInThisRepo := True;
+                            end;
+                            Break;
+                          end;
+                        end
+                        else if VersionsArr.Types[j] = jtString then
+                        begin
+                          CandidateVer := VersionsArr.Strings[j];
+                          if (DesiredVer = '') or (CandidateVer = DesiredVer) then
+                          begin
+                            if not Result then
+                            begin
+                              FoundVersion := CandidateVer;
+                              DownloadURL := PkgObj.Get('download', '');
+                              DownloadURL := StringReplace(DownloadURL, '{tag}', PkgKey + '@' + CandidateVer, [rfReplaceAll]);
+                              DownloadURL := StringReplace(DownloadURL, '{package}', PkgKey, [rfReplaceAll]);
+                              DownloadURL := StringReplace(DownloadURL, '{version}', CandidateVer, [rfReplaceAll]);
+                              Checksum := '';
+                              RepoName := RootObj.Get('name', CurrentRepo);
+                              Result := True;
+                              MatchedInThisRepo := True;
+                            end
+                            else
+                            begin
+                              MatchedInThisRepo := True;
+                            end;
+                            Break;
+                          end;
+                        end;
+                      end;
+                    end;
+
+                    if MatchedInThisRepo and Result and (not SameText(RepoName, CurrentRepo)) then
+                    begin
+                      if FoundInOtherRepos.IndexOf(CurrentRepo) < 0 then
+                        FoundInOtherRepos.Add(CurrentRepo);
+                    end;
+                    Break;
+                  end;
+                end;
+              end;
+            end;
+            Data.Free;
+          end;
+        except
+        end;
+      finally
+        Parser.Free;
+      end;
+
+      if (TargetRepo <> '') and Result then
+        Break;
+    end;
+
+    if (TargetRepo = '') and Result and (FoundInOtherRepos.Count > 0) then
+    begin
+      WriteLn('Notice: Package "' + PkgName + '" was also found in repository: ' + FoundInOtherRepos.CommaText + '.');
+      WriteLn('        Using [' + RepoName + '] (by priority). To specify repository, use: bv lib install <repo>:' + PkgName);
+    end;
+  finally
+    if Assigned(RepoList) then RepoList.Free;
+    FoundInOtherRepos.Free;
+  end;
+end;
+
+procedure CmdLibList(IsGlobal: Boolean = False);
+var
+  SR: TSearchRec;
+  Path, Extra, Ver: string;
+  Count: Integer;
+begin
+  WriteLn('');
+  if IsGlobal then
+  begin
+    Path := GetGlobalPackagesPath;
+    WriteLn('=== User Global Packages (~/.blaisevue/packages) ===');
+    WriteLn(StringOfChar('-', 55));
+    Count := 0;
+    if FindFirst(Path + '*', faDirectory, SR) = 0 then
+    begin
+      repeat
+        if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+        begin
+          Inc(Count);
+          Ver := GetPackageVersionFromFolder(Path + SR.Name);
+          if Ver <> '' then Ver := ' (v' + Ver + ')';
+          WriteLn('  - ', SR.Name, Ver);
+        end;
+      until FindNext(SR) <> 0;
+      FindClose(SR);
+    end;
+    if Count = 0 then
+      WriteLn('  (No global packages installed)');
+    WriteLn(StringOfChar('-', 55));
+  end
+  else
+  begin
+    Path := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator;
+    WriteLn('=== Installed Libraries in Project (/lib) ===');
+    WriteLn(StringOfChar('-', 55));
+    Count := 0;
+    if DirectoryExists(Path) and (FindFirst(Path + '*', faDirectory, SR) = 0) then
+    begin
+      repeat
+        if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+        begin
+          Inc(Count);
+          Extra := '';
+          Ver := GetPackageVersionFromFolder(Path + SR.Name);
+          if Ver <> '' then Extra := ' (v' + Ver + ')';
+          if IsOfficialCorePackage(SR.Name) then
+            Extra := Extra + ' [Official Core]';
+          if FileExists(Path + SR.Name + DirectorySeparator + 'setup.pas') then
+            Extra := Extra + ' [Scripted]';
+          WriteLn('  - ', SR.Name, Extra);
+        end;
+      until FindNext(SR) <> 0;
+      FindClose(SR);
+    end;
+    if Count = 0 then
+      WriteLn('  (No libraries installed in /lib)');
+    WriteLn(StringOfChar('-', 55));
+
+    WriteLn('Official Core Packages (packages/core):');
+    WriteLn('  - blaise-themes, blaise-icons, blaise-ui, blaise-ui-mobile,');
+    WriteLn('    blaise-charts, blaise-reports, blaise-studio');
+    WriteLn('Use "bv lib list --global" to view packages in global cache.');
+    WriteLn(StringOfChar('-', 55));
+  end;
+end;
+
+procedure CmdLibRemove(const LibName: string; IsGlobal: Boolean = False);
+var
+  Path, CorePath: string;
+  CanonicalName: string;
+begin
+  CanonicalName := LowerCase(Trim(LibName));
+  CorePath := GetPackagesPath + CanonicalName;
+  if DirectoryExists(CorePath) or 
+     (CanonicalName = 'themes') or (CanonicalName = 'icons') or 
+     (CanonicalName = 'ui') or (CanonicalName = 'mobile') or 
+     (CanonicalName = 'charts') or (CanonicalName = 'reports') or (CanonicalName = 'studio') then
+  begin
+    if IsGlobal then
+    begin
+      WriteLn('Action blocked: "' + LibName + '" is an official core framework package (packages/core/) and cannot be removed from framework.');
+      Exit;
+    end;
+  end;
+
+  if IsGlobal then
+  begin
+    Path := GetGlobalPackagesPath + CanonicalName;
+    if DirectoryExists(Path) then
+    begin
+      DeleteDir(Path);
+      WriteLn('Global package "' + LibName + '" removed successfully from ~/.blaisevue/packages/.');
+    end
+    else
+      WriteLn('Error: Global package "' + LibName + '" not found in ~/.blaisevue/packages/.');
+  end
+  else
+  begin
+    Path := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator + LibName;
+    if not DirectoryExists(Path) then
+    begin
+      if (CanonicalName = 'themes') or (CanonicalName = 'blaise-themes') then Path := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator + 'themes'
+      else if (CanonicalName = 'icons') or (CanonicalName = 'blaise-icons') then Path := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator + 'icons';
+    end;
+
+    if DirectoryExists(Path) then
+    begin
+      if FileExists(Path + DirectorySeparator + 'setup.pas') then
+      begin
+        WriteLn('Detected setup script. Running cleanup...');
+        RunSetupScript(LibName, 'remove');
+      end;
+      DeleteDir(Path);
+      WriteLn('Library "' + LibName + '" removed from /lib successfully.');
+    end
+    else
+      WriteLn('Error: Library "' + LibName + '" not found in /lib.');
+  end;
+end;
+
+procedure CmdLibInstall(const TargetArg: string; IsGlobal: Boolean = False);
+var
+  RawArg, PkgName, ReqVersion, TargetRepo, RemainingArg: string;
+  AtPos, ColonPos: Integer;
+  LibPath, GlobalPath, TempZip: string;
+  FoundVer, DownloadURL, Checksum, RepoName, CachedVer: string;
+  Client: TFPHTTPClient;
+begin
+  RawArg := Trim(TargetArg);
+  if RawArg = '' then
+  begin
+    WriteLn('Usage: bv lib install [<repo>:]<package[@version]> [--global|-g]');
+    WriteLn('       bv lib install <url|archive.zip> [--global|-g]');
+    Exit;
+  end;
+
+  if StartsText('http://', RawArg) or StartsText('https://', RawArg) or 
+     (LowerCase(ExtractFileExt(RawArg)) = '.zip') or FileExists(RawArg) or FileExists(ExpandFileName(RawArg)) then
+  begin
+    InstallDirectArchive(RawArg, IsGlobal);
+    Exit;
+  end;
+
+  // Check for <repo>:<package>[@version]
+  ColonPos := Pos(':', RawArg);
+  if ColonPos > 0 then
+  begin
+    TargetRepo := Trim(Copy(RawArg, 1, ColonPos - 1));
+    RemainingArg := Trim(Copy(RawArg, ColonPos + 1, Length(RawArg) - ColonPos));
+  end
+  else
+  begin
+    TargetRepo := '';
+    RemainingArg := RawArg;
+  end;
+
+  AtPos := Pos('@', RemainingArg);
+  if AtPos > 0 then
+  begin
+    PkgName := Trim(Copy(RemainingArg, 1, AtPos - 1));
+    ReqVersion := Trim(Copy(RemainingArg, AtPos + 1, Length(RemainingArg) - AtPos));
+  end
+  else
+  begin
+    PkgName := Trim(RemainingArg);
+    ReqVersion := '';
+  end;
+
+  if PkgName = '' then
+  begin
+    WriteLn('Error: Invalid package name in "' + RawArg + '".');
+    Exit;
+  end;
+
+  // Security Check: Core Reserved Names from third-party repositories
+  if (TargetRepo <> '') and (not (SameText(TargetRepo, 'official') or SameText(TargetRepo, 'blaisevue-ecosystem'))) and IsReservedCorePackageName(PkgName) then
+  begin
+    WriteLn('Error: Cannot install package "' + PkgName + '" from repository "' + TargetRepo + '".');
+    WriteLn('The package name "' + PkgName + '" is reserved for the official BlaiseVue Core framework.');
+    WriteLn('Third-party repositories are not permitted to publish packages with reserved core names.');
+    Halt(1);
+  end;
+
+  // If TargetRepo is empty or official, check if it is a local native core package:
+  if (TargetRepo = '') or SameText(TargetRepo, 'official') or SameText(TargetRepo, 'blaisevue-ecosystem') then
+  begin
+    if IsOfficialCorePackage(PkgName) then
+    begin
+      if IsGlobal then
+      begin
+        WriteLn('Notice: Package "' + PkgName + '" is an official core framework package in packages/core/.');
+        WriteLn('It is already available natively across all BlaiseVue installations.');
+        Exit;
+      end;
+      InstallCorePackage(PkgName);
+      Exit;
+    end;
+  end;
+
+  GlobalPath := GetGlobalPackagesPath + PkgName;
+  LibPath := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator + PkgName;
+
+  if TargetRepo <> '' then
+    WriteLn('Searching for package "' + PkgName + '" in repository [' + TargetRepo + ']...')
+  else
+    WriteLn('Searching for package "' + PkgName + '" in ecosystem repositories...');
+
+  if FindPackageInEcosystem(PkgName, ReqVersion, FoundVer, DownloadURL, Checksum, RepoName, TargetRepo) then
+  begin
+    if (not IsGlobal) and DirectoryExists(GlobalPath) then
+    begin
+      CachedVer := GetPackageVersionFromFolder(GlobalPath);
+      if (CachedVer <> '') and (CachedVer = FoundVer) then
+      begin
+        WriteLn('Installing package "' + PkgName + '" (v' + CachedVer + ') from user global cache (~/.blaisevue/packages)...');
+        ForceDir(GetCurrentDir + DirectorySeparator + 'lib');
+        if DirectoryExists(LibPath) then DeleteDir(LibPath);
+        ForceDir(LibPath);
+        CopyDir(GlobalPath, LibPath, []);
+        WriteLn('Package "' + PkgName + '" installed successfully in lib/' + PkgName + '/.');
+        if FileExists(LibPath + DirectorySeparator + 'setup.pas') then
+        begin
+          WriteLn('Executing package setup script...');
+          RunSetupScript(PkgName, 'install');
+        end;
+        Exit;
+      end;
+    end;
+  end
+  else
+  begin
+    if (TargetRepo = '') and (not IsGlobal) and DirectoryExists(GlobalPath) then
+    begin
+      CachedVer := GetPackageVersionFromFolder(GlobalPath);
+      if (ReqVersion = '') or (ReqVersion = CachedVer) then
+      begin
+        WriteLn('Notice: Remote catalog unreachable. Using cached version (v' + CachedVer + ')...');
+        ForceDir(GetCurrentDir + DirectorySeparator + 'lib');
+        if DirectoryExists(LibPath) then DeleteDir(LibPath);
+        ForceDir(LibPath);
+        CopyDir(GlobalPath, LibPath, []);
+        WriteLn('Package "' + PkgName + '" installed successfully in lib/' + PkgName + '/.');
+        Exit;
+      end;
+    end;
+
+    WriteLn('Error: Package "' + PkgName + '"');
+    if ReqVersion <> '' then
+      WriteLn('  Requested version: ' + ReqVersion)
+    else
+      WriteLn('  (latest version)');
+    if TargetRepo <> '' then
+      WriteLn('Was not found in repository [' + TargetRepo + '].')
+    else
+      WriteLn('Was not found in any registered repositories.');
+    WriteLn('Hint: Run "bv repo sync" to update catalog or "bv repo list" to view registered repositories.');
+    Halt(1);
+  end;
+
+  WriteLn('Found in [' + RepoName + ']: ' + PkgName + ' v' + FoundVer);
+  WriteLn('Downloading package: ' + DownloadURL);
+
+  TempZip := GetUserBlaiseVueDir + DirectorySeparator + 'cache' + DirectorySeparator + PkgName + '-' + FoundVer + '.zip';
+  ForceDir(ExtractFileDir(TempZip));
+
+  Client := TFPHTTPClient.Create(nil);
+  try
+    try
+      Client.AllowRedirect := True;
+      Client.Get(DownloadURL, TempZip);
+    except
+      on E: Exception do
+      begin
+        WriteLn('Error downloading package: ' + E.Message);
+        Halt(1);
+      end;
+    end;
+  finally
+    Client.Free;
+  end;
+
+  WriteLn('Extracting to user global cache (~/.blaisevue/packages/' + PkgName + ')...');
+  if DirectoryExists(GlobalPath) then DeleteDir(GlobalPath);
+  ForceDir(GlobalPath);
+  ExtractZipSmart(TempZip, GetGlobalPackagesPath, PkgName);
+
+  if not IsGlobal then
+  begin
+    ForceDir(GetCurrentDir + DirectorySeparator + 'lib');
+    if DirectoryExists(LibPath) then DeleteDir(LibPath);
+    ForceDir(LibPath);
+    CopyDir(GlobalPath, LibPath, []);
+    WriteLn('Package "' + PkgName + '" (v' + FoundVer + ') installed successfully in lib/' + PkgName + '/.');
+    if FileExists(LibPath + DirectorySeparator + 'setup.pas') then
+    begin
+      WriteLn('Executing package setup script...');
+      RunSetupScript(PkgName, 'install');
+    end;
+  end
+  else
+  begin
+    WriteLn('Global package "' + PkgName + '" (v' + FoundVer + ') installed successfully!');
+  end;
+end;
+
+procedure CmdLibUpdate(const LibName: string = ''; IsGlobal: Boolean = False);
+var
+  TargetBase, PkgDir, CurrentVer, FoundVer, DownloadURL, Checksum, RepoName: string;
+  RawArg, TargetRepo, PkgName: string;
+  ColonPos: Integer;
+  SR: TSearchRec;
+  UpdatedCount: Integer;
+begin
+  if IsGlobal then
+    TargetBase := GetGlobalPackagesPath
+  else
+    TargetBase := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator;
+
+  RawArg := Trim(LibName);
+  if RawArg <> '' then
+  begin
+    ColonPos := Pos(':', RawArg);
+    if ColonPos > 0 then
+    begin
+      TargetRepo := Trim(Copy(RawArg, 1, ColonPos - 1));
+      PkgName := Trim(Copy(RawArg, ColonPos + 1, Length(RawArg) - ColonPos));
+    end
+    else
+    begin
+      TargetRepo := '';
+      PkgName := RawArg;
+    end;
+
+    if (not IsGlobal) and (TargetRepo = '') and IsOfficialCorePackage(PkgName) then
+    begin
+      WriteLn('Package "' + PkgName + '" is an official core framework package. It updates automatically with BlaiseVue framework updates (bv self-update).');
+      Exit;
+    end;
+
+    PkgDir := TargetBase + PkgName;
+    if not DirectoryExists(PkgDir) then
+    begin
+      WriteLn('Library "' + PkgName + '" not found in ' + TargetBase + ' to update.');
+      Exit;
+    end;
+    CurrentVer := GetPackageVersionFromFolder(PkgDir);
+    if FindPackageInEcosystem(PkgName, 'latest', FoundVer, DownloadURL, Checksum, RepoName, TargetRepo) then
+    begin
+      if (CurrentVer <> '') and (CurrentVer = FoundVer) then
+        WriteLn('Package "' + PkgName + '" is already up to date (v' + CurrentVer + ') [' + RepoName + '].')
+      else
+      begin
+        WriteLn('Updating "' + PkgName + '" from v' + CurrentVer + ' to v' + FoundVer + ' [' + RepoName + ']...');
+        if TargetRepo <> '' then
+          CmdLibInstall(TargetRepo + ':' + PkgName + '@' + FoundVer, IsGlobal)
+        else
+          CmdLibInstall(PkgName + '@' + FoundVer, IsGlobal);
+      end;
+    end
+    else
+    begin
+      if TargetRepo <> '' then
+        WriteLn('Package "' + PkgName + '" not found in repository [' + TargetRepo + '].')
+      else
+        WriteLn('Package "' + PkgName + '" not found in ecosystem repositories.');
+    end;
+    Exit;
+  end;
+
+  WriteLn('Checking for library updates in ' + TargetBase + '...');
+  UpdatedCount := 0;
+  if DirectoryExists(TargetBase) and (FindFirst(TargetBase + '*', faDirectory, SR) = 0) then
+  begin
+    repeat
+      if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+      begin
+        CurrentVer := GetPackageVersionFromFolder(TargetBase + SR.Name);
+        if (not IsGlobal) and IsOfficialCorePackage(SR.Name) then
+        begin
+          WriteLn('  [OK] ' + SR.Name + ' (v' + CurrentVer + ') is an official core package.');
+        end
+        else if FindPackageInEcosystem(SR.Name, 'latest', FoundVer, DownloadURL, Checksum, RepoName) then
+        begin
+          if (CurrentVer <> '') and (CurrentVer <> FoundVer) then
+          begin
+            WriteLn('  [Updating] ' + SR.Name + ': v' + CurrentVer + ' -> v' + FoundVer);
+            CmdLibInstall(SR.Name + '@' + FoundVer, IsGlobal);
+            Inc(UpdatedCount);
+          end
+          else
+            WriteLn('  [OK] ' + SR.Name + ' (v' + CurrentVer + ') is up to date.');
+        end;
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+  if UpdatedCount = 0 then
+    WriteLn('All libraries are up to date!')
+  else
+    WriteLn(IntToStr(UpdatedCount) + ' library(ies) updated successfully!');
+end;
+
+procedure CmdLibOutdated(IsGlobal: Boolean = False);
+var
+  TargetBase, InstalledVer, FoundVer, DownloadURL, Checksum, RepoName, RowStatus: string;
+  SR: TSearchRec;
+  TotalCount, OutdatedCount: Integer;
+  IsCore: Boolean;
+begin
+  if IsGlobal then
+    TargetBase := GetGlobalPackagesPath
+  else
+    TargetBase := GetCurrentDir + DirectorySeparator + 'lib' + DirectorySeparator;
+
+  WriteLn('');
+  WriteLn('=== Package Version Inspection (bv lib outdated) ===');
+  if IsGlobal then
+    WriteLn('Scope: User Global Cache (~/.blaisevue/packages)')
+  else
+    WriteLn('Scope: Local Project (/lib)');
+  WriteLn(StringOfChar('-', 78));
+  WriteLn(PadRight('Package', 22), PadRight('Installed', 14), PadRight('Latest', 16), PadRight('Status', 26));
+  WriteLn(StringOfChar('-', 78));
+
+  TotalCount := 0;
+  OutdatedCount := 0;
+
+  if DirectoryExists(TargetBase) and (FindFirst(TargetBase + '*', faDirectory, SR) = 0) then
+  begin
+    repeat
+      if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+      begin
+        Inc(TotalCount);
+        InstalledVer := GetPackageVersionFromFolder(TargetBase + SR.Name);
+        IsCore := (not IsGlobal) and IsOfficialCorePackage(SR.Name);
+
+        if IsCore then
+        begin
+          if InstalledVer = '' then InstalledVer := '4.4.0';
+          FoundVer := InstalledVer;
+          WriteLn(PadRight(SR.Name, 22), PadRight('v' + InstalledVer, 14), PadRight('v' + FoundVer, 16), 'Official Core (Up to date)');
+        end
+        else
+        begin
+          if InstalledVer = '' then InstalledVer := 'unknown';
+
+          if FindPackageInEcosystem(SR.Name, 'latest', FoundVer, DownloadURL, Checksum, RepoName) then
+          begin
+            if (InstalledVer <> 'unknown') and (InstalledVer <> FoundVer) then
+            begin
+              Inc(OutdatedCount);
+              RowStatus := 'Outdated -> v' + FoundVer;
+              WriteLn(PadRight(SR.Name, 22), PadRight('v' + InstalledVer, 14), PadRight('v' + FoundVer, 16), RowStatus);
+            end
+            else
+            begin
+              WriteLn(PadRight(SR.Name, 22), PadRight('v' + InstalledVer, 14), PadRight('v' + FoundVer, 16), 'Up to date');
+            end;
+          end
+          else
+          begin
+            WriteLn(PadRight(SR.Name, 22), PadRight('v' + InstalledVer, 14), PadRight('-', 16), 'Not registered in catalog');
+          end;
+        end;
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+
+  WriteLn(StringOfChar('-', 78));
+  if TotalCount = 0 then
+    WriteLn('No packages installed in current scope.')
+  else if OutdatedCount = 0 then
+    WriteLn('All ' + IntToStr(TotalCount) + ' package(s) are up to date!')
+  else
+  begin
+    WriteLn(IntToStr(OutdatedCount) + ' of ' + IntToStr(TotalCount) + ' package(s) are outdated.');
+    if IsGlobal then
+      WriteLn('To update, run: bv lib update --global')
+    else
+      WriteLn('To update, run: bv lib update');
+  end;
+  WriteLn('');
+end;
+
+procedure CmdLibSearch(const Query: string);
+var
+  CacheDir, CacheFile, RawJson, PkgKey, PkgDesc, PkgLatest, PkgAuthor, QueryLower: string;
+  TargetRepo, SearchTerm, RepoName: string;
+  ColonPos: Integer;
+  SR: TSearchRec;
+  Parser: TJSONParser;
+  Data: TJSONData;
+  RootObj, PackagesObj, PkgObj: TJSONObject;
+  i, MatchCount: Integer;
+begin
+  QueryLower := LowerCase(Trim(Query));
+  TargetRepo := '';
+  SearchTerm := QueryLower;
+  ColonPos := Pos(':', QueryLower);
+  if ColonPos > 0 then
+  begin
+    TargetRepo := Trim(Copy(QueryLower, 1, ColonPos - 1));
+    SearchTerm := Trim(Copy(QueryLower, ColonPos + 1, Length(QueryLower) - ColonPos));
+  end;
+
+  WriteLn('');
+  WriteLn('=== Package Search in BlaiseVue Ecosystem ===');
+  if TargetRepo <> '' then
+  begin
+    if SearchTerm <> '' then
+      WriteLn('Filter: repo="' + TargetRepo + '", term="' + SearchTerm + '"')
+    else
+      WriteLn('Filter: repository "' + TargetRepo + '"');
+  end
+  else if SearchTerm <> '' then
+    WriteLn('Filter: "' + SearchTerm + '"')
+  else
+    WriteLn('Listing all available ecosystem packages:');
+  WriteLn(StringOfChar('-', 65));
+
+  CacheDir := ExtractFileDir(GetReposConfigPath) + DirectorySeparator + 'cache';
+  if not DirectoryExists(CacheDir) then
+    CmdRepoSync;
+
+  MatchCount := 0;
+  if FindFirst(CacheDir + DirectorySeparator + '*-ecosystem.json', faAnyFile, SR) = 0 then
+  begin
+    repeat
+      if (SR.Name <> '.') and (SR.Name <> '..') then
+      begin
+        CacheFile := CacheDir + DirectorySeparator + SR.Name;
+        RawJson := ReadFileToString(CacheFile);
+        if Trim(RawJson) <> '' then
+        begin
+          Parser := TJSONParser.Create(RawJson, True);
+          try
+            try
+              Data := Parser.Parse;
+              if Assigned(Data) and (Data.JSONType = jtObject) then
+              begin
+                RootObj := TJSONObject(Data);
+                RepoName := RootObj.Get('name', StringReplace(SR.Name, '-ecosystem.json', '', [rfReplaceAll]));
+
+                if (TargetRepo = '') or SameText(TargetRepo, RepoName) or SameText(TargetRepo, StringReplace(SR.Name, '-ecosystem.json', '', [rfReplaceAll])) then
+                begin
+                  PackagesObj := RootObj.Get('packages', TJSONObject(nil));
+                  if Assigned(PackagesObj) then
+                  begin
+                    for i := 0 to PackagesObj.Count - 1 do
+                    begin
+                      PkgKey := PackagesObj.Names[i];
+                      PkgObj := TJSONObject(PackagesObj.Items[i]);
+                      PkgDesc := PkgObj.Get('description', '');
+                      PkgLatest := PkgObj.Get('latest', '');
+                      PkgAuthor := PkgObj.Get('author', '');
+
+                      // Ignore third-party packages claiming reserved core names
+                      if (not SameText(RepoName, 'official')) and IsReservedCorePackageName(PkgKey) then
+                        Continue;
+
+                      if (SearchTerm = '') or (Pos(SearchTerm, LowerCase(PkgKey)) > 0) or
+                         (Pos(SearchTerm, LowerCase(PkgDesc)) > 0) then
+                      begin
+                        Inc(MatchCount);
+                        WriteLn('  * [' + RepoName + '] ' + PkgKey + ' (v' + PkgLatest + ')');
+                        if PkgDesc <> '' then
+                          WriteLn('    Description: ' + PkgDesc);
+                        if PkgAuthor <> '' then
+                          WriteLn('    Author:      ', PkgAuthor);
+                        WriteLn('');
+                      end;
+                    end;
+                  end;
+                end;
+              end;
+              if Assigned(Data) then Data.Free;
+            except
+            end;
+          finally
+            Parser.Free;
+          end;
+        end;
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+
+  if MatchCount = 0 then
+    WriteLn('  No packages found matching search criteria.')
+  else
+    WriteLn(IntToStr(MatchCount), ' package(s) found. To install, run: bv lib install [<repo>:]<name>');
+  WriteLn(StringOfChar('-', 65));
 end;
 
 procedure CmdLibPack(const TargetDir: string; SkipTests: Boolean);
@@ -6714,6 +7982,12 @@ begin
   end;
 
   PkgFolder := PkgName;
+
+  if IsReservedCorePackageName(PkgName) then
+  begin
+    WriteLn('WARNING: Package name "' + PkgName + '" matches a reserved BlaiseVue Core framework name.');
+    WriteLn('Third-party repositories will reject packages with reserved core names.');
+  end;
 
   if not SkipTests then
   begin
@@ -7707,6 +8981,120 @@ begin
 end;
 
 // =====================================================================
+//  COMANDO: REMOVE MOBILE & DESKTOP PLATFORMS
+// =====================================================================
+
+procedure CmdRemoveMobile(ForceFlag: Boolean);
+var
+  MobileDir, CapConfigFile, BinMobileDir: string;
+  Ans: string;
+  DeletedAny: Boolean;
+begin
+  MobileDir := GetCurrentDir + DirectorySeparator + 'mobile';
+  CapConfigFile := GetCurrentDir + DirectorySeparator + 'capacitor.config.json';
+  BinMobileDir := GetCurrentDir + DirectorySeparator + 'bin' + DirectorySeparator + 'mobile';
+
+  if not DirectoryExists(MobileDir) and not FileExists(CapConfigFile) and not DirectoryExists(BinMobileDir) then
+  begin
+    WriteLn('Plataforma Mobile nao encontrada no projeto atual (pasta mobile/ nao existe).');
+    Exit;
+  end;
+
+  if not ForceFlag then
+  begin
+    Write('Tem certeza que deseja remover a plataforma Mobile (pasta mobile/ e capacitor.config.json)? [s/N]: ');
+    ReadLn(Ans);
+    Ans := LowerCase(Trim(Ans));
+    if (Ans <> 's') and (Ans <> 'y') and (Ans <> 'sim') and (Ans <> 'yes') then
+    begin
+      WriteLn('Operacao cancelada.');
+      Exit;
+    end;
+  end;
+
+  DeletedAny := False;
+
+  if DirectoryExists(MobileDir) then
+  begin
+    WriteLn('  [-] Excluindo pasta mobile/ ...');
+    DeleteDir(MobileDir);
+    DeletedAny := True;
+  end;
+
+  if FileExists(CapConfigFile) then
+  begin
+    WriteLn('  [-] Excluindo capacitor.config.json ...');
+    DeleteFile(CapConfigFile);
+    DeletedAny := True;
+  end;
+
+  if DirectoryExists(BinMobileDir) then
+  begin
+    WriteLn('  [-] Excluindo binarios em bin/mobile/ ...');
+    DeleteDir(BinMobileDir);
+    DeletedAny := True;
+  end;
+
+  if DeletedAny then
+  begin
+    WriteLn('  [SUCCESS] Plataforma Mobile removida com sucesso!');
+    WriteLn('  [INFO] Para reativa-la no futuro, basta executar:');
+    WriteLn('         bv mobile init');
+  end;
+end;
+
+procedure CmdRemoveDesktop(ForceFlag: Boolean);
+var
+  DesktopDir, BinDesktopDir: string;
+  Ans: string;
+  DeletedAny: Boolean;
+begin
+  DesktopDir := GetCurrentDir + DirectorySeparator + 'desktop';
+  BinDesktopDir := GetCurrentDir + DirectorySeparator + 'bin' + DirectorySeparator + 'desktop';
+
+  if not DirectoryExists(DesktopDir) and not DirectoryExists(BinDesktopDir) then
+  begin
+    WriteLn('Plataforma Desktop nao encontrada no projeto atual (pasta desktop/ nao existe).');
+    Exit;
+  end;
+
+  if not ForceFlag then
+  begin
+    Write('Tem certeza que deseja remover a plataforma Desktop (pasta desktop/)? [s/N]: ');
+    ReadLn(Ans);
+    Ans := LowerCase(Trim(Ans));
+    if (Ans <> 's') and (Ans <> 'y') and (Ans <> 'sim') and (Ans <> 'yes') then
+    begin
+      WriteLn('Operacao cancelada.');
+      Exit;
+    end;
+  end;
+
+  DeletedAny := False;
+
+  if DirectoryExists(DesktopDir) then
+  begin
+    WriteLn('  [-] Excluindo pasta desktop/ ...');
+    DeleteDir(DesktopDir);
+    DeletedAny := True;
+  end;
+
+  if DirectoryExists(BinDesktopDir) then
+  begin
+    WriteLn('  [-] Excluindo binarios em bin/desktop/ ...');
+    DeleteDir(BinDesktopDir);
+    DeletedAny := True;
+  end;
+
+  if DeletedAny then
+  begin
+    WriteLn('  [SUCCESS] Plataforma Desktop removida com sucesso!');
+    WriteLn('  [INFO] Para reativa-la no futuro, basta executar:');
+    WriteLn('         bv desktop init');
+  end;
+end;
+
+// =====================================================================
 
 //  COMANDO: LIST
 
@@ -7971,6 +9359,194 @@ begin
   end;
 end;
 
+var
+  CachedCliVersion: string = '';
+
+function GetCliVersion: string;
+var
+  CurP, SdkDir, PkgPath, Content: string;
+  PObj: TJSONObject;
+begin
+  if CachedCliVersion <> '' then
+  begin
+    Result := CachedCliVersion;
+    Exit;
+  end;
+
+  Result := '4.4.0';
+
+  PkgPath := GetCurrentDir + DirectorySeparator + 'package.json';
+  if FileExists(PkgPath) then
+  begin
+    try
+      Content := ReadFileToString(PkgPath);
+      PObj := TJSONObject(TJSONParser.Create(Content).Parse);
+      try
+        if GetJsonString(PObj, 'name', '') = 'blaisevue' then
+        begin
+          Result := GetJsonString(PObj, 'version', Result);
+          CachedCliVersion := Result;
+          Exit;
+        end;
+      finally
+        PObj.Free;
+      end;
+    except
+    end;
+  end;
+
+  SdkDir := ExtractFilePath(ParamStr(0));
+  CurP := ExcludeTrailingPathDelimiter(SdkDir);
+  PkgPath := ExtractFilePath(CurP) + 'package.json';
+  if FileExists(PkgPath) then
+  begin
+    try
+      Content := ReadFileToString(PkgPath);
+      PObj := TJSONObject(TJSONParser.Create(Content).Parse);
+      try
+        Result := GetJsonString(PObj, 'version', Result);
+        CachedCliVersion := Result;
+        Exit;
+      finally
+        PObj.Free;
+      end;
+    except
+    end;
+  end;
+
+  CachedCliVersion := Result;
+end;
+
+function GetCliMajorMinor: string;
+var
+  FullVer: string;
+  Dot1, Dot2: Integer;
+begin
+  FullVer := GetCliVersion;
+  Dot1 := Pos('.', FullVer);
+  if Dot1 > 0 then
+  begin
+    Dot2 := PosEx('.', FullVer, Dot1 + 1);
+    if Dot2 > 0 then
+      Result := Copy(FullVer, 1, Dot2 - 1)
+    else
+      Result := FullVer;
+  end
+  else
+    Result := FullVer;
+end;
+
+procedure UpdateJsonFileVersion(const FilePath, NewVer: string);
+var
+  Content: string;
+  Obj: TJSONObject;
+begin
+  if not FileExists(FilePath) then Exit;
+  try
+    Content := ReadFileToString(FilePath);
+    Obj := TJSONObject(TJSONParser.Create(Content).Parse);
+    try
+      SetJsonString(Obj, 'version', NewVer);
+      WriteStringToFile(FilePath, Obj.FormatJSON([], 2));
+      WriteLn('  [+] Synchronized: ' + FilePath + ' (v' + NewVer + ')');
+    finally
+      Obj.Free;
+    end;
+  except
+    on E: Exception do
+      WriteLn('  [!] Notice: could not update ' + FilePath + ': ' + E.Message);
+  end;
+end;
+
+procedure SyncMonorepoVersions(const TargetVer: string);
+var
+  RootDir, TargetFile, CoreDir: string;
+  SR: TSearchRec;
+  BuildDate: string;
+begin
+  RootDir := GetCurrentDir;
+  if not (DirectoryExists(RootDir + DirectorySeparator + 'core') and DirectoryExists(RootDir + DirectorySeparator + 'packages')) then
+  begin
+    if DirectoryExists(ExtractFilePath(RootDir) + 'core') and DirectoryExists(ExtractFilePath(RootDir) + 'packages') then
+      RootDir := ExcludeTrailingPathDelimiter(ExtractFilePath(RootDir))
+    else
+    begin
+      RootDir := ExtractFilePath(ParamStr(0));
+      RootDir := ExcludeTrailingPathDelimiter(RootDir);
+      RootDir := ExcludeTrailingPathDelimiter(ExtractFilePath(RootDir));
+    end;
+  end;
+
+  if not (DirectoryExists(RootDir + DirectorySeparator + 'core') and DirectoryExists(RootDir + DirectorySeparator + 'packages')) then
+    Exit;
+
+  BuildDate := FormatDateTime('yyyy-mm-dd', Now);
+
+  TargetFile := RootDir + DirectorySeparator + 'package.json';
+  UpdateJsonFileVersion(TargetFile, TargetVer);
+
+  TargetFile := RootDir + DirectorySeparator + 'core' + DirectorySeparator + 'uAppVersion.pas';
+  if FileExists(TargetFile) or DirectoryExists(RootDir + DirectorySeparator + 'core') then
+  begin
+    WriteStringToFile(TargetFile,
+      'unit uAppVersion;' + #10#10 +
+      '{$mode objfpc}{$H+}' + #10#10 +
+      'interface' + #10#10 +
+      'const' + #10 +
+      '  APP_NAME = ''blaisevue'';' + #10 +
+      '  APP_VERSION = ''' + TargetVer + ''';' + #10 +
+      '  APP_AUTHOR = ''BlaiseVue Core Team'';' + #10 +
+      '  APP_LICENSE = ''GPL-2.0-only AND LGPL-2.1-only WITH Static-linking-exception'';' + #10 +
+      '  APP_BUILD_DATE = ''' + BuildDate + ''';' + #10#10 +
+      'implementation' + #10#10 +
+      'end.' + #10);
+    WriteLn('  [+] Synchronized: ' + TargetFile + ' (v' + TargetVer + ')');
+  end;
+
+  TargetFile := RootDir + DirectorySeparator + 'demo-app' + DirectorySeparator + 'package.json';
+  UpdateJsonFileVersion(TargetFile, TargetVer);
+
+  TargetFile := RootDir + DirectorySeparator + 'demo-app' + DirectorySeparator + 'src' + DirectorySeparator + 'uAppVersion.pas';
+  if FileExists(TargetFile) or DirectoryExists(RootDir + DirectorySeparator + 'demo-app' + DirectorySeparator + 'src') then
+  begin
+    WriteStringToFile(TargetFile,
+      'unit uAppVersion;' + #10#10 +
+      '{$mode objfpc}{$H+}' + #10#10 +
+      'interface' + #10#10 +
+      'const' + #10 +
+      '  APP_NAME = ''blaisevue-demo-app'';' + #10 +
+      '  APP_VERSION = ''' + TargetVer + ''';' + #10 +
+      '  APP_AUTHOR = ''BlaiseVue Core Team'';' + #10 +
+      '  APP_LICENSE = ''MIT'';' + #10 +
+      '  APP_BUILD_DATE = ''' + BuildDate + ''';' + #10#10 +
+      'implementation' + #10#10 +
+      'end.' + #10);
+    WriteLn('  [+] Synchronized: ' + TargetFile + ' (v' + TargetVer + ')');
+  end;
+
+  TargetFile := RootDir + DirectorySeparator + 'packages' + DirectorySeparator + 'tools' + DirectorySeparator + 'vscode-extension' + DirectorySeparator + 'package.json';
+  UpdateJsonFileVersion(TargetFile, TargetVer);
+
+  TargetFile := RootDir + DirectorySeparator + 'packages' + DirectorySeparator + 'tools' + DirectorySeparator + 'devtools-extension' + DirectorySeparator + 'manifest.json';
+  UpdateJsonFileVersion(TargetFile, TargetVer);
+
+  CoreDir := RootDir + DirectorySeparator + 'packages' + DirectorySeparator + 'core' + DirectorySeparator;
+  if DirectoryExists(CoreDir) and (FindFirst(CoreDir + '*', faDirectory, SR) = 0) then
+  begin
+    repeat
+      if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+      begin
+        TargetFile := CoreDir + SR.Name + DirectorySeparator + 'package.json';
+        if FileExists(TargetFile) then
+          UpdateJsonFileVersion(TargetFile, TargetVer);
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+
+  CachedCliVersion := TargetVer;
+end;
+
 function BumpSemVer(const CurrentVer, BumpType: string): string;
 var
   Parts: TStringList;
@@ -8226,6 +9802,7 @@ begin
     ParentDir := ExtractFilePath(CurDir);
     if FileExists(ParentDir + 'bin' + DirectorySeparator + 'bv.pas') or
        FileExists(ParentDir + 'core' + DirectorySeparator + 'BVCompiler.pas') or
+       FileExists(ParentDir + 'packages' + DirectorySeparator + 'core' + DirectorySeparator + 'blaise-charts' + DirectorySeparator + 'BVChart.bv') or
        FileExists(ParentDir + 'packages' + DirectorySeparator + 'blaise-charts' + DirectorySeparator + 'BVChart.bv') then
     begin
       Result := True;
@@ -8478,6 +10055,37 @@ begin
     Exit;
   end;
 
+  if SubCmd = 'sync' then
+  begin
+    if not LoadPackageJson(PkgJson) then
+    begin
+      WriteLn('ERROR: package.json not found in current directory.');
+      Halt(1);
+    end;
+    try
+      VerVal := GetJsonString(PkgJson, 'version', '4.4.0');
+      NameVal := GetJsonString(PkgJson, 'name', 'blaisevue');
+      AuthVal := GetJsonString(PkgJson, 'author', 'BlaiseVue Core Team');
+      LicVal := GetJsonString(PkgJson, 'license', 'MIT');
+
+      WriteLn('');
+      WriteLn('  BlaiseVue Monorepo & Project Version Synchronization');
+      WriteLn('  ====================================================');
+      WriteLn('  Source of Truth (package.json): v' + VerVal);
+      WriteLn('');
+
+      SyncAppVersionUnit(NameVal, VerVal, AuthVal, LicVal);
+      SyncMonorepoVersions(VerVal);
+
+      WriteLn('');
+      WriteLn('  [SUCCESS] Single Source of Truth synchronization completed (v' + VerVal + ').');
+      WriteLn('');
+    finally
+      PkgJson.Free;
+    end;
+    Exit;
+  end;
+
   if SubCmd = 'init' then
   begin
     if not LoadPackageJson(PkgJson) then
@@ -8572,6 +10180,7 @@ begin
       AuthVal := GetJsonString(PkgJson, 'author', '');
       LicVal := GetJsonString(PkgJson, 'license', 'MIT');
       SyncAppVersionUnit(NameVal, NewVer, AuthVal, LicVal);
+      SyncMonorepoVersions(NewVer);
     finally
       PkgJson.Free;
     end;
@@ -8579,8 +10188,576 @@ begin
   end;
 
   WriteLn('Unknown meta subcommand: "' + SubCmd + '".');
-  WriteLn('Usage: bv meta [show|init|get <field>|set <field> <val>|bump <patch|minor|major>]');
+  WriteLn('Usage: bv meta [show|init|get <field>|set <field> <val>|bump <patch|minor|major>|sync]');
   Halt(1);
+end;
+
+procedure CmdPathList;
+var
+  AppCfgPath, Line, CleanLine, PathVal, PkgName: string;
+  Lines: TStringList;
+  CoreList, Pas2jsList, CustomList: TStringList;
+  i: Integer;
+begin
+  AppCfgPath := GetCurrentDir + DirectorySeparator + 'app.cfg';
+  if not FileExists(AppCfgPath) then
+  begin
+    WriteLn('ERROR: app.cfg not found in current directory.');
+    WriteLn('Ensure you are in the root of a BlaiseVue application.');
+    Halt(1);
+  end;
+
+  Lines := TStringList.Create;
+  CoreList := TStringList.Create;
+  Pas2jsList := TStringList.Create;
+  CustomList := TStringList.Create;
+  try
+    Lines.LoadFromFile(AppCfgPath);
+
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Line := Trim(Lines[i]);
+      if StartsText('-Fu', Line) then
+      begin
+        CleanLine := Copy(Line, 4, Length(Line) - 3);
+        if (Length(CleanLine) >= 2) and (CleanLine[1] = '"') and (CleanLine[Length(CleanLine)] = '"') then
+          PathVal := Copy(CleanLine, 2, Length(CleanLine) - 2)
+        else
+          PathVal := CleanLine;
+
+        if (PathVal = 'generated') or (PathVal = 'core') or (PathVal = 'common') or
+           (PathVal = 'src/services') or (PathVal = 'src\services') or (PathVal = 'src') then
+          CoreList.Add(PathVal)
+        else if (Pos('pas2js', LowerCase(PathVal)) > 0) or (Pos('packages', LowerCase(PathVal)) > 0) then
+          Pas2jsList.Add(PathVal)
+        else
+          CustomList.Add(PathVal);
+      end;
+    end;
+
+    WriteLn('');
+    WriteLn('  BlaiseVue Compiler Search Paths (app.cfg)');
+    WriteLn('  =========================================');
+    WriteLn('');
+
+    WriteLn('  [Framework & Core Paths]');
+    if CoreList.Count = 0 then
+      WriteLn('    (none)')
+    else
+      for i := 0 to CoreList.Count - 1 do
+        WriteLn('    - ' + CoreList[i]);
+    WriteLn('');
+
+    WriteLn('  [Pas2JS Built-in Packages]');
+    if Pas2jsList.Count = 0 then
+      WriteLn('    (none - use "bv path add pas2js:<pkg>" to link official packages)')
+    else
+    begin
+      for i := 0 to Pas2jsList.Count - 1 do
+      begin
+        PkgName := ExtractFileName(ExcludeTrailingPathDelimiter(Pas2jsList[i]));
+        if PkgName = 'src' then
+          PkgName := ExtractFileName(ExcludeTrailingPathDelimiter(ExtractFilePath(ExcludeTrailingPathDelimiter(Pas2jsList[i]))));
+        WriteLn('    - pas2js:' + PadRight(PkgName, 16) + ' -> ' + Pas2jsList[i]);
+      end;
+    end;
+    WriteLn('');
+
+    WriteLn('  [Custom & Legacy Unit Paths]');
+    if CustomList.Count = 0 then
+      WriteLn('    (none - use "bv path add <folder>" to link legacy units)')
+    else
+      for i := 0 to CustomList.Count - 1 do
+        WriteLn('    - ' + CustomList[i]);
+    WriteLn('');
+
+  finally
+    Lines.Free;
+    CoreList.Free;
+    Pas2jsList.Free;
+    CustomList.Free;
+  end;
+end;
+
+procedure CmdPathAdd(const Target: string);
+var
+  AppCfgPath, CleanTarget, ResolvedPath, FinalPath, FormattedLine, PkgNameOnly: string;
+  Lines: TStringList;
+  IsPas2jsPkg: Boolean;
+  i: Integer;
+begin
+  if Target = '' then
+  begin
+    WriteLn('Usage: bv path add <folder|pas2js:package>');
+    Halt(1);
+  end;
+
+  AppCfgPath := GetCurrentDir + DirectorySeparator + 'app.cfg';
+  if not FileExists(AppCfgPath) then
+  begin
+    WriteLn('ERROR: app.cfg not found in current directory.');
+    Halt(1);
+  end;
+
+  CleanTarget := Trim(Target);
+  IsPas2jsPkg := False;
+  ResolvedPath := '';
+
+  if StartsText('pas2js:', CleanTarget) or ResolvePas2JSPackagePath(CleanTarget, ResolvedPath) then
+  begin
+    if not ResolvePas2JSPackagePath(CleanTarget, ResolvedPath) then
+    begin
+      WriteLn('ERROR: Pas2JS package "' + CleanTarget + '" not found in distribution.');
+      WriteLn('Run "bv path available" to view all installable packages.');
+      Halt(1);
+    end;
+    IsPas2jsPkg := True;
+  end;
+
+  if IsPas2jsPkg then
+  begin
+    FinalPath := ExtractRelativePath(GetCurrentDir + DirectorySeparator, ResolvedPath);
+    if FinalPath = '' then FinalPath := ResolvedPath;
+  end
+  else
+  begin
+    if DirectoryExists(CleanTarget) then
+      FinalPath := CleanTarget
+    else if DirectoryExists(GetCurrentDir + DirectorySeparator + CleanTarget) then
+      FinalPath := CleanTarget
+    else
+    begin
+      WriteLn('ERROR: Directory does not exist: "' + CleanTarget + '"');
+      Halt(1);
+    end;
+  end;
+
+  FinalPath := StringReplace(FinalPath, '\', '/', [rfReplaceAll]);
+  if Pos(' ', FinalPath) > 0 then
+    FormattedLine := '-Fu"' + FinalPath + '"'
+  else
+    FormattedLine := '-Fu' + FinalPath;
+
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(AppCfgPath);
+    for i := 0 to Lines.Count - 1 do
+    begin
+      if (Lines[i] = FormattedLine) or (Lines[i] = '-Fu' + FinalPath) or (Lines[i] = '-Fu"' + FinalPath + '"') then
+      begin
+        WriteLn('  Search path already present in app.cfg: ' + FinalPath);
+        Exit;
+      end;
+    end;
+
+    Lines.Add(FormattedLine);
+    Lines.SaveToFile(AppCfgPath);
+
+    WriteLn('');
+    WriteLn('  [+] Search path added to app.cfg:');
+    WriteLn('      ' + FormattedLine);
+    if IsPas2jsPkg then
+    begin
+      PkgNameOnly := CleanTarget;
+      if StartsText('pas2js:', PkgNameOnly) then
+        PkgNameOnly := Copy(PkgNameOnly, 8, Length(PkgNameOnly) - 7);
+      WriteLn('      Package:     pas2js:' + PkgNameOnly);
+      WriteLn('      Description: ' + GetPas2JSPackageDescription(PkgNameOnly));
+    end;
+    WriteLn('  Units located in this path are now accessible in uses clauses.');
+    WriteLn('');
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure CmdPathRemove(const Target: string);
+var
+  AppCfgPath, CleanTarget, NormTarget, Line, CleanLine, PathVal: string;
+  Lines: TStringList;
+  i: Integer;
+  RemovedCount: Integer;
+begin
+  if Target = '' then
+  begin
+    WriteLn('Usage: bv path remove <folder|pas2js:package>');
+    Halt(1);
+  end;
+
+  AppCfgPath := GetCurrentDir + DirectorySeparator + 'app.cfg';
+  if not FileExists(AppCfgPath) then
+  begin
+    WriteLn('ERROR: app.cfg not found in current directory.');
+    Halt(1);
+  end;
+
+  CleanTarget := Trim(Target);
+  if StartsText('pas2js:', CleanTarget) then
+    CleanTarget := Copy(CleanTarget, 8, Length(CleanTarget) - 7);
+  NormTarget := StringReplace(CleanTarget, '\', '/', [rfReplaceAll]);
+
+  Lines := TStringList.Create;
+  RemovedCount := 0;
+  try
+    Lines.LoadFromFile(AppCfgPath);
+    for i := Lines.Count - 1 downto 0 do
+    begin
+      Line := Trim(Lines[i]);
+      if StartsText('-Fu', Line) then
+      begin
+        CleanLine := Copy(Line, 4, Length(Line) - 3);
+        if (Length(CleanLine) >= 2) and (CleanLine[1] = '"') and (CleanLine[Length(CleanLine)] = '"') then
+          PathVal := Copy(CleanLine, 2, Length(CleanLine) - 2)
+        else
+          PathVal := CleanLine;
+
+        PathVal := StringReplace(PathVal, '\', '/', [rfReplaceAll]);
+
+        if (PathVal = NormTarget) or (Pos('/' + NormTarget + '/', PathVal) > 0) or
+           (EndsText('/' + NormTarget, PathVal)) or (EndsText('/' + NormTarget + '/src', PathVal)) then
+        begin
+          Lines.Delete(i);
+          Inc(RemovedCount);
+          WriteLn('  [-] Removed from app.cfg: ' + Line);
+        end;
+      end;
+    end;
+
+    if RemovedCount > 0 then
+    begin
+      Lines.SaveToFile(AppCfgPath);
+      WriteLn('');
+      WriteLn('  [SUCCESS] Successfully removed ' + IntToStr(RemovedCount) + ' search path(s) from app.cfg.');
+      WriteLn('');
+    end
+    else
+    begin
+      WriteLn('Notice: No matching search path found in app.cfg for "' + Target + '".');
+      WriteLn('Run "bv path list" to see all currently active search paths.');
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure CmdPathAvailable;
+var
+  Packages: TStringList;
+  AppCfgContent, AppCfgPath, PkgName, Status, Desc: string;
+  i: Integer;
+begin
+  Packages := ListAvailablePas2JSPackages;
+  AppCfgPath := GetCurrentDir + DirectorySeparator + 'app.cfg';
+  if FileExists(AppCfgPath) then
+    AppCfgContent := LowerCase(ReadFileToString(AppCfgPath))
+  else
+    AppCfgContent := '';
+
+  try
+    WriteLn('');
+    WriteLn('  Available Pas2JS Built-in Packages & Libraries');
+    WriteLn('  ==============================================');
+    WriteLn('  Use "bv path add pas2js:<package>" to link into your project.');
+    WriteLn('');
+
+    for i := 0 to Packages.Count - 1 do
+    begin
+      PkgName := Packages[i];
+      Desc := GetPas2JSPackageDescription(PkgName);
+      if (AppCfgContent <> '') and (Pos('/' + LowerCase(PkgName), AppCfgContent) > 0) then
+        Status := ' [active]'
+      else
+        Status := '';
+
+      WriteLn('  * pas2js:' + PadRight(PkgName, 16) + Status);
+      WriteLn('    ' + Desc);
+      WriteLn('');
+    end;
+  finally
+    Packages.Free;
+  end;
+end;
+
+procedure CmdPath;
+var
+  SubCmd, TargetArg: string;
+begin
+  SubCmd := '';
+  TargetArg := '';
+  if ParamCount >= 2 then SubCmd := LowerCase(ParamStr(2));
+  if ParamCount >= 3 then TargetArg := ParamStr(3);
+
+  if (SubCmd = '') or (SubCmd = 'list') or (SubCmd = 'ls') or (SubCmd = 'show') then
+  begin
+    CmdPathList;
+    Exit;
+  end;
+
+  if (SubCmd = 'add') or (SubCmd = 'link') or (SubCmd = 'use') then
+  begin
+    if TargetArg = '' then
+    begin
+      WriteLn('Usage: bv path add <folder|pas2js:package>');
+      Halt(1);
+    end;
+    CmdPathAdd(TargetArg);
+    Exit;
+  end;
+
+  if (SubCmd = 'remove') or (SubCmd = 'rm') or (SubCmd = 'del') or (SubCmd = 'unlink') then
+  begin
+    if TargetArg = '' then
+    begin
+      WriteLn('Usage: bv path remove <folder|pas2js:package>');
+      Halt(1);
+    end;
+    CmdPathRemove(TargetArg);
+    Exit;
+  end;
+
+  if (SubCmd = 'available') or (SubCmd = 'pas2js') or (SubCmd = 'browse') or (SubCmd = 'catalog') then
+  begin
+    CmdPathAvailable;
+    Exit;
+  end;
+
+  WriteLn('Unknown path subcommand: "' + SubCmd + '".');
+  WriteLn('Usage: bv path [list|add <folder|pas2js:pkg>|remove <target>|available]');
+  Halt(1);
+end;
+
+function IsIgnoredProjectDir(const DirName: string): Boolean;
+var
+  LName: string;
+begin
+  LName := LowerCase(DirName);
+  Result := (LName = 'node_modules') or
+            (LName = '.git') or
+            (LName = 'dist') or
+            (LName = 'units') or
+            (LName = '.bv_backup') or
+            (LName = 'backup') or
+            (LName = 'lib_cache') or
+            (LName = 'tmp') or
+            (LName = 'temp') or
+            (LName = '.vscode') or
+            (LName = 'android') or
+            (LName = 'assets') or
+            (LName = 'bin') or
+            (LName = '.gradle');
+end;
+
+function IsRelevantProjectFile(const FileName: string; IsRootDir: Boolean): Boolean;
+var
+  Ext, LName: string;
+begin
+  LName := LowerCase(FileName);
+  Ext := LowerCase(ExtractFileExt(FileName));
+
+  // 1. Core Pascal and BlaiseVue components in any project folder
+  if (Ext = '.bv') or (Ext = '.pas') or (Ext = '.pp') or (Ext = '.inc') or (Ext = '.lpr') then
+    Exit(True);
+
+  // 2. Project configuration & manifests (in root directory only)
+  if IsRootDir then
+  begin
+    if (LName = 'app.cfg') or (LName = 'app.json') or (LName = 'index.html') or
+       (LName = 'package.json') or (Ext = '.cfg') then
+      Exit(True);
+  end;
+
+  Result := False;
+end;
+
+procedure CollectProjectUnits(const Dir, RelPrefix: string; List: TStringList; IsRootDir: Boolean = False);
+var
+  SR: TSearchRec;
+  RelPath, FullPath: string;
+begin
+  FullPath := IncludeTrailingPathDelimiter(Dir);
+  if FindFirst(FullPath + '*', faAnyFile, SR) = 0 then
+  begin
+    try
+      repeat
+        if (SR.Name <> '.') and (SR.Name <> '..') then
+        begin
+          if (SR.Attr and faDirectory) <> 0 then
+          begin
+            if not IsIgnoredProjectDir(SR.Name) then
+              CollectProjectUnits(FullPath + SR.Name, 
+                                  RelPrefix + SR.Name + DirectorySeparator, List, False);
+          end
+          else
+          begin
+            if IsRelevantProjectFile(SR.Name, IsRootDir) then
+            begin
+              // Skip the main project .lpr in root since it is already registered as Unit0
+              if not (IsRootDir and (ExtractFileExt(SR.Name) = '.lpr')) then
+              begin
+                RelPath := RelPrefix + SR.Name;
+                List.Add(RelPath);
+              end;
+            end;
+          end;
+        end;
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+  end;
+end;
+
+procedure CmdLazarus;
+var
+  SubCmd: string;
+  CurDir, ProjName, CleanName, LprFile, LpiFile: string;
+  LprContent, LpiContent, RelFile: string;
+  UnitsList: TStringList;
+  i: Integer;
+begin
+  SubCmd := 'init';
+  if ParamCount >= 2 then SubCmd := LowerCase(ParamStr(2));
+  if (SubCmd <> 'init') and (SubCmd <> 'sync') and (SubCmd <> 'update') then
+  begin
+    WriteLn('Usage: bv lazarus [init|sync]');
+    Exit;
+  end;
+
+  CurDir := GetCurrentDir;
+  if not FileExists(CurDir + DirectorySeparator + 'app.cfg') and
+     not FileExists(CurDir + DirectorySeparator + 'package.json') then
+  begin
+    WriteLn('  [ERROR] No BlaiseVue project detected in current directory.');
+    WriteLn('          Run "bv lazarus init" inside a project containing app.cfg.');
+    Halt(1);
+  end;
+
+  ProjName := ExtractFileName(ExcludeTrailingPathDelimiter(CurDir));
+  CleanName := StringReplace(ProjName, '-', '_', [rfReplaceAll]);
+  CleanName := StringReplace(CleanName, ' ', '_', [rfReplaceAll]);
+  if CleanName = '' then CleanName := 'BlaiseVueApp';
+
+  LprFile := CurDir + DirectorySeparator + CleanName + '.lpr';
+  LpiFile := CurDir + DirectorySeparator + CleanName + '.lpi';
+
+  // 1. Create <CleanName>.lpr if missing
+  if not FileExists(LprFile) then
+  begin
+    LprContent :=
+      'program ' + CleanName + ';' + #10 +
+      #10 +
+      '{$mode objfpc}{$H+}' + #10 +
+      #10 +
+      'uses' + #10 +
+      '  {$IFDEF UNIX}' + #10 +
+      '  cthreads,' + #10 +
+      '  {$ENDIF}' + #10 +
+      '  Classes, SysUtils;' + #10 +
+      #10 +
+      '// BlaiseVue Reactive Single File Components (.bv)' + #10 +
+      '// Press F9 in Lazarus IDE to launch the live dev server!' + #10 +
+      'begin' + #10 +
+      '  WriteLn(''BlaiseVue Project: ' + CleanName + ''');' + #10 +
+      'end.' + #10;
+    WriteStringToFile(LprFile, LprContent);
+    WriteLn('  [+] Created ' + CleanName + '.lpr');
+  end;
+
+  // 2. Collect all project files across the whole project (*.bv, *.pas, configs)
+  UnitsList := TStringList.Create;
+  try
+    CollectProjectUnits(CurDir, '', UnitsList, True);
+    UnitsList.Sort;
+
+    // 3. Assemble <CleanName>.lpi
+    LpiContent :=
+      '<?xml version="1.0" encoding="UTF-8"?>' + #10 +
+      '<CONFIG>' + #10 +
+      '  <ProjectOptions>' + #10 +
+      '    <Version Value="12"/>' + #10 +
+      '    <General>' + #10 +
+      '      <Flags>' + #10 +
+      '        <MainUnitHasCreateFormStatements Value="False"/>' + #10 +
+      '        <MainUnitHasTitleStatement Value="False"/>' + #10 +
+      '        <Scaled Value="True"/>' + #10 +
+      '      </Flags>' + #10 +
+      '      <SessionStorage Value="InProjectDir"/>' + #10 +
+      '      <Title Value="' + CleanName + '"/>' + #10 +
+      '      <ResourceType Value="res"/>' + #10 +
+      '      <UseXPManifest Value="True"/>' + #10 +
+      '    </General>' + #10 +
+      '    <BuildModes Count="1">' + #10 +
+      '      <Item1 Name="Default" Default="True"/>' + #10 +
+      '    </BuildModes>' + #10 +
+      '    <PublishOptions>' + #10 +
+      '      <Version Value="2"/>' + #10 +
+      '      <UseFileFilters Value="True"/>' + #10 +
+      '    </PublishOptions>' + #10 +
+      '    <RunParams>' + #10 +
+      '      <FormatVersion Value="2"/>' + #10 +
+      '      <Modes ActiveMode="default">' + #10 +
+      '        <Mode Name="default">' + #10 +
+      '          <local>' + #10 +
+      '            <HostApplicationFilename Value="bv.exe"/>' + #10 +
+      '            <CommandLineParams Value="dev"/>' + #10 +
+      '          </local>' + #10 +
+      '        </Mode>' + #10 +
+      '      </Modes>' + #10 +
+      '    </RunParams>' + #10 +
+      '    <Units Count="' + IntToStr(UnitsList.Count + 1) + '">' + #10 +
+      '      <Unit0>' + #10 +
+      '        <Filename Value="' + CleanName + '.lpr"/>' + #10 +
+      '        <IsPartOfProject Value="True"/>' + #10 +
+      '      </Unit0>' + #10;
+
+    for i := 0 to UnitsList.Count - 1 do
+    begin
+      RelFile := UnitsList[i];
+      LpiContent := LpiContent +
+        '      <Unit' + IntToStr(i + 1) + '>' + #10 +
+        '        <Filename Value="' + RelFile + '"/>' + #10 +
+        '        <IsPartOfProject Value="True"/>' + #10 +
+        '      </Unit' + IntToStr(i + 1) + '>' + #10;
+    end;
+
+    LpiContent := LpiContent +
+      '    </Units>' + #10 +
+      '  </ProjectOptions>' + #10 +
+      '  <CompilerOptions>' + #10 +
+      '    <Version Value="11"/>' + #10 +
+      '    <Target>' + #10 +
+      '      <Filename Value="bin/' + CleanName + '"/>' + #10 +
+      '    </Target>' + #10 +
+      '    <SearchPaths>' + #10 +
+      '      <IncludeFiles Value="$(ProjOutDir)"/>' + #10 +
+      '      <OtherUnitFiles Value="src;src/services;src/components;src/views;server;tests;desktop;generated;lib"/>' + #10 +
+      '      <UnitOutputDirectory Value="generated/units"/>' + #10 +
+      '    </SearchPaths>' + #10 +
+      '    <Other>' + #10 +
+      '      <CustomOptions Value="-dBLAISEVUE"/>' + #10 +
+      '      <ExecuteBefore>' + #10 +
+      '        <Command Value="bv build"/>' + #10 +
+      '        <CompileReasons Compile="True" Build="True" Run="False"/>' + #10 +
+      '      </ExecuteBefore>' + #10 +
+      '    </Other>' + #10 +
+      '  </CompilerOptions>' + #10 +
+      '</CONFIG>' + #10;
+
+    WriteStringToFile(LpiFile, LpiContent);
+    WriteLn('  [+] Created ' + CleanName + '.lpi (' + IntToStr(UnitsList.Count) + ' units indexed)');
+    WriteLn;
+    WriteLn('  ========================================================================');
+    WriteLn('    [SUCCESS] Lazarus IDE project synchronized!');
+    WriteLn('    Project:   ' + CleanName + '.lpi');
+    WriteLn('    Inspector: ' + IntToStr(UnitsList.Count) + ' components (.bv) & units indexed in tree');
+    WriteLn('    F9 (Run):  Launches live dev server with instant HMR');
+    WriteLn('    Ctrl+F9:   Runs bv build & AST verification');
+    WriteLn('  ========================================================================');
+    WriteLn('  To open in Lazarus: Project -> Open Project -> ' + CleanName + '.lpi');
+    WriteLn;
+  finally
+    UnitsList.Free;
+  end;
 end;
 
 procedure CmdReset;
@@ -9102,7 +11279,7 @@ procedure CmdServe;
 
 begin
 
-  WriteLn('=== BlaiseVue 2.0 Dev Server (HMR Enabled) ===');
+  WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Dev Server (HMR Enabled) ===');
 
   if not HasCommand('node') then
 
@@ -9591,7 +11768,7 @@ var
 
 begin
 
-  WriteLn('=== BlaiseVue 3.0 Documentation & Component Playground Generator ===');
+  WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Documentation & Component Playground Generator ===');
 
   CurDir := GetCurrentDir;
 
@@ -9761,7 +11938,7 @@ begin
 
       '  <meta name="viewport" content="width=device-width, initial-scale=1.0">'#10 +
 
-      '  <title>BlaiseVue 3.0 Documentation & Component Playground</title>'#10 +
+      '  <title>BlaiseVue ' + GetCliMajorMinor + ' Documentation & Component Playground</title>'#10 +
 
       '  <style>'#10 +
 
@@ -10031,7 +12208,7 @@ var
 
 begin
 
-  WriteLn('=== BlaiseVue 3.0 Static Site Generator (SSG & Pre-rendering) ===');
+  WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Static Site Generator (SSG & Pre-rendering) ===');
 
   AppFile := 'src' + DirectorySeparator + 'app.bv';
 
@@ -10169,7 +12346,7 @@ procedure CmdWasm(const SubCmd: string);
 
 begin
 
-  WriteLn('=== BlaiseVue 3.0 WebAssembly Engine ===');
+  WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' WebAssembly Engine ===');
 
   if SubCmd = 'info' then
 
@@ -10221,7 +12398,7 @@ procedure CmdTestE2E;
 
 begin
 
-  WriteLn('=== BlaiseVue 3.0 Headless E2E Test Suite ===');
+  WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Headless E2E Test Suite ===');
 
   if not HasCommand('node') then
 
@@ -10245,86 +12422,374 @@ end;
 
 
 
-procedure CmdExtension(const Action: string);
-
+function CheckVSCodeExtensionInstalled(const HomeDir: string; out FoundVersion: string): Boolean;
 var
-
-  ExtDir, ScriptPath: string;
-
+  SR: TSearchRec;
+  CheckDirs: array[0..2] of string;
+  I: Integer;
+  BaseDir: string;
 begin
+  Result := False;
+  FoundVersion := '';
+  CheckDirs[0] := HomeDir + DirectorySeparator + '.vscode' + DirectorySeparator + 'extensions';
+  CheckDirs[1] := HomeDir + DirectorySeparator + '.antigravity' + DirectorySeparator + 'extensions';
+  CheckDirs[2] := HomeDir + DirectorySeparator + '.antigravity-ide' + DirectorySeparator + 'extensions';
 
-  WriteLn('=== BlaiseVue 3.5 VS Code Extension Tool ===');
-
-  ExtDir := GetSDKPath + 'vscode-extension';
-
-  if not DirectoryExists(ExtDir) then
-
+  for I := 0 to High(CheckDirs) do
   begin
-
-    WriteLn('Error: vscode-extension directory not found at: ' + ExtDir);
-
-    Exit;
-
+    BaseDir := CheckDirs[I];
+    if DirectoryExists(BaseDir) then
+    begin
+      if DirectoryExists(BaseDir + DirectorySeparator + 'blaisevue-vscode') then
+      begin
+        Result := True;
+        Exit;
+      end;
+      if FindFirst(BaseDir + DirectorySeparator + 'blaisevue.blaisevue-vscode*', faDirectory, SR) = 0 then
+      begin
+        repeat
+          if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+          begin
+            FoundVersion := Copy(SR.Name, Length('blaisevue.blaisevue-vscode-') + 1, Length(SR.Name));
+            Result := True;
+            FindClose(SR);
+            Exit;
+          end;
+        until FindNext(SR) <> 0;
+        FindClose(SR);
+      end;
+    end;
   end;
+end;
 
+procedure DeleteVSCodeExtension(const HomeDir: string);
+var
+  SR: TSearchRec;
+  CheckDirs: array[0..2] of string;
+  I: Integer;
+  BaseDir: string;
+begin
+  CheckDirs[0] := HomeDir + DirectorySeparator + '.vscode' + DirectorySeparator + 'extensions';
+  CheckDirs[1] := HomeDir + DirectorySeparator + '.antigravity' + DirectorySeparator + 'extensions';
+  CheckDirs[2] := HomeDir + DirectorySeparator + '.antigravity-ide' + DirectorySeparator + 'extensions';
 
-
-  if (Action = 'install') or (Action = '') then
-
+  for I := 0 to High(CheckDirs) do
   begin
+    BaseDir := CheckDirs[I];
+    if DirectoryExists(BaseDir) then
+    begin
+      if DirectoryExists(BaseDir + DirectorySeparator + 'blaisevue-vscode') then
+        DeleteDir(BaseDir + DirectorySeparator + 'blaisevue-vscode');
+      if FindFirst(BaseDir + DirectorySeparator + 'blaisevue.blaisevue-vscode*', faDirectory, SR) = 0 then
+      begin
+        repeat
+          if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+            DeleteDir(BaseDir + DirectorySeparator + SR.Name);
+        until FindNext(SR) <> 0;
+        FindClose(SR);
+      end;
+    end;
+  end;
+end;
 
-    WriteLn('Installing BlaiseVue VS Code extension into ~/.vscode/extensions...');
+procedure CmdExtension(const Action: string = ''; const Target: string = '');
+var
+  ExtDir, DevtoolsDir, LazarusDir, LazarusPkg, LazbuildPath, ScriptPath, SubCmd, TargetLower: string;
+  GlobalToolsDir, CustomToolPath, HomeDir, InstalledVer: string;
+  VSCodeInstalled: Boolean;
+  SR: TSearchRec;
+  Count: Integer;
+begin
+  SubCmd := LowerCase(Trim(Action));
+  TargetLower := LowerCase(Trim(Target));
+  if SubCmd = '' then SubCmd := 'list';
 
-    ScriptPath := ExtDir + DirectorySeparator + 'install_extension.ps1';
+  if (SubCmd = 'list') or (SubCmd = 'ls') then
+  begin
+    WriteLn('');
+    WriteLn('=== BlaiseVue Development Extensions & Tools ===');
+    WriteLn(StringOfChar('-', 74));
+    WriteLn(PadRight('Extension', 22), PadRight('Category / Target', 26), PadRight('Status', 26));
+    WriteLn(StringOfChar('-', 74));
 
     {$IFDEF WINDOWS}
-
-    ExecuteProcess('powershell', '-File "' + ScriptPath + '"');
-
+    HomeDir := GetEnvironmentVariable('USERPROFILE');
+    if HomeDir = '' then HomeDir := GetEnvironmentVariable('APPDATA');
     {$ELSE}
-
-    ExecuteProcess('/bin/sh', '-c "mkdir -p ~/.vscode/extensions/blaisevue-vscode && cp -r ''' + ExtDir + '''/* ~/.vscode/extensions/blaisevue-vscode/"');
-
+    HomeDir := GetEnvironmentVariable('HOME');
     {$ENDIF}
 
-  end
+    VSCodeInstalled := CheckVSCodeExtensionInstalled(HomeDir, InstalledVer);
 
-  else if (Action = 'package') or (Action = 'vsix') then
-
-  begin
-
-    if not HasCommand('node') then
-
+    if VSCodeInstalled then
     begin
+      if InstalledVer <> '' then
+        WriteLn(PadRight('blaise-vscode', 22), PadRight('VS Code / VSCodium', 26), 'Installed (v' + InstalledVer + ')')
+      else
+        WriteLn(PadRight('blaise-vscode', 22), PadRight('VS Code / VSCodium', 26), 'Installed (IDE)');
+    end
+    else
+      WriteLn(PadRight('blaise-vscode', 22), PadRight('VS Code / VSCodium', 26), 'Available (Run: bv extension install blaise-vscode)');
 
-      PrintNodeRequiredError('package the VS Code extension (@vscode/vsce)');
+    LazarusDir := GetBuiltinToolsPath + 'lazarus';
+    LazarusPkg := LazarusDir + DirectorySeparator + 'blaisevue_ide.lpk';
+    if DirectoryExists(LazarusDir) and FileExists(LazarusPkg) then
+      WriteLn(PadRight('blaise-lazarus', 22), PadRight('Lazarus IDE Package', 26), 'Available (Run: bv extension install blaise-lazarus)')
+    else
+      WriteLn(PadRight('blaise-lazarus', 22), PadRight('Lazarus IDE Package', 26), 'Not found');
 
-      Exit;
+    DevtoolsDir := GetBuiltinToolsPath + 'devtools-extension';
+    if DirectoryExists(DevtoolsDir) then
+      WriteLn(PadRight('blaise-devtools', 22), PadRight('Browser DevTools (F12)', 26), 'Available (Run: bv extension install blaise-devtools)')
+    else
+      WriteLn(PadRight('blaise-devtools', 22), PadRight('Browser DevTools (F12)', 26), 'Not found');
 
+    GlobalToolsDir := GetGlobalToolsPath;
+    Count := 0;
+    if DirectoryExists(GlobalToolsDir) and (FindFirst(GlobalToolsDir + '*', faDirectory, SR) = 0) then
+    begin
+      repeat
+        if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+        begin
+          Inc(Count);
+          WriteLn(PadRight(SR.Name, 22), PadRight('User Custom Tool', 26), 'Custom (~/.blaisevue/tools)');
+        end;
+      until FindNext(SR) <> 0;
+      FindClose(SR);
     end;
 
-    WriteLn('Packaging BlaiseVue VS Code extension into .vsix...');
-
-    {$IFDEF WINDOWS}
-
-    ExecuteProcess('cmd', '/c cd /d "' + ExtDir + '" && npx @vscode/vsce package --no-git-tag-version --allow-missing-repository');
-
-    {$ELSE}
-
-    ExecuteProcess('/bin/sh', '-c "cd ''' + ExtDir + ''' && npx @vscode/vsce package --no-git-tag-version --allow-missing-repository"');
-
-    {$ENDIF}
-
+    WriteLn(StringOfChar('-', 74));
+    WriteLn('Commands:');
+    WriteLn('  bv extension install <target>   Installs a tool (e.g. blaise-vscode, blaise-lazarus, blaise-devtools)');
+    WriteLn('  bv extension remove <target>    Uninstalls a tool (e.g. blaise-vscode, <custom>)');
+    WriteLn('  bv extension pack [target]      Packages extension into a standalone .vsix bundle');
+    WriteLn('');
   end
-
-  else
-
+  else if (SubCmd = 'install') or (SubCmd = 'i') or (SubCmd = 'add') then
   begin
+    if TargetLower = '' then
+    begin
+      WriteLn('Error: Target extension or tool name required.');
+      WriteLn('Usage: bv extension install <target>');
+      WriteLn('');
+      WriteLn('Available targets:');
+      WriteLn('  blaise-vscode   - Installs official VS Code / Antigravity IDE extension (alias: vscode)');
+      WriteLn('  blaise-lazarus  - Compiles and registers official Lazarus IDE package (alias: lazarus)');
+      WriteLn('  blaise-devtools - Instructions to load browser DevTools extension (alias: devtools)');
+      WriteLn('  <custom>        - Installs a custom tool from ~/.blaisevue/tools/<name>');
+      Exit;
+    end;
 
-    WriteLn('Usage: bv extension <install|package>');
+    if (TargetLower = 'blaise-vscode') or (TargetLower = 'vscode') then
+    begin
+      ExtDir := GetBuiltinToolsPath + 'vscode-extension';
+      if not DirectoryExists(ExtDir) then
+        ExtDir := GetSDKPath + 'vscode-extension';
+      if not DirectoryExists(ExtDir) then
+      begin
+        WriteLn('Error: vscode-extension directory not found at: ' + ExtDir);
+        Exit;
+      end;
 
+      WriteLn('Installing BlaiseVue VS Code extension into ~/.vscode/extensions...');
+      ScriptPath := ExtDir + DirectorySeparator + 'install_extension.ps1';
+      {$IFDEF WINDOWS}
+      ExecuteProcess('powershell', '-File "' + ScriptPath + '"');
+      {$ELSE}
+      ExecuteProcess('/bin/sh', '-c "mkdir -p ~/.vscode/extensions/blaisevue-vscode && cp -r ''' + ExtDir + '''/* ~/.vscode/extensions/blaisevue-vscode/"');
+      {$ENDIF}
+    end
+    else if (TargetLower = 'blaise-lazarus') or (TargetLower = 'lazarus') then
+    begin
+      LazarusDir := GetBuiltinToolsPath + 'lazarus';
+      LazarusPkg := LazarusDir + DirectorySeparator + 'blaisevue_ide.lpk';
+      if not FileExists(LazarusPkg) then
+      begin
+        WriteLn('Error: Lazarus package not found at: ' + LazarusPkg);
+        Exit;
+      end;
+
+      WriteLn('=== BlaiseVue Lazarus IDE Package ===');
+      WriteLn('Package: ' + LazarusPkg);
+      WriteLn('');
+
+      LazbuildPath := '';
+      {$IFDEF WINDOWS}
+      if FileExists('C:\lazarus\lazbuild.exe') then
+        LazbuildPath := 'C:\lazarus\lazbuild.exe'
+      else if FileExists('lazbuild.exe') then
+        LazbuildPath := 'lazbuild.exe';
+      {$ELSE}
+      if FileExists('/usr/bin/lazbuild') then
+        LazbuildPath := '/usr/bin/lazbuild'
+      else if FileExists('/usr/local/bin/lazbuild') then
+        LazbuildPath := '/usr/local/bin/lazbuild';
+      {$ENDIF}
+
+      if LazbuildPath <> '' then
+      begin
+        WriteLn('Compiling package with lazbuild (' + LazbuildPath + ')...');
+        ExecuteProcess(LazbuildPath, LazarusPkg);
+        WriteLn('');
+        WriteLn('Package compiled successfully!');
+        WriteLn('To complete installation in Lazarus:');
+        WriteLn('  1. Open Lazarus IDE');
+        WriteLn('  2. Go to: Package -> Open Package File (.lpk)');
+        WriteLn('  3. Select: ' + LazarusPkg);
+        WriteLn('  4. Click "Use" -> "Install" and restart Lazarus');
+      end
+      else
+      begin
+        WriteLn('To install into Lazarus IDE:');
+        WriteLn('  1. Open Lazarus IDE');
+        WriteLn('  2. Go to: Package -> Open Package File (.lpk)');
+        WriteLn('  3. Select: ' + LazarusPkg);
+        WriteLn('  4. Click "Use" -> "Install"');
+      end;
+    end
+    else if (TargetLower = 'blaise-devtools') or (TargetLower = 'devtools') then
+    begin
+      DevtoolsDir := GetBuiltinToolsPath + 'devtools-extension';
+      WriteLn('');
+      WriteLn('=== BlaiseVue Browser DevTools Extension ===');
+      WriteLn('Directory: ' + DevtoolsDir);
+      WriteLn('');
+      WriteLn('To install in Mozilla Firefox:');
+      WriteLn('  1. Open Firefox and navigate to: about:debugging#/runtime/this-firefox');
+      WriteLn('  2. Click "Load Temporary Add-on..."');
+      WriteLn('  3. Select the file: ' + DevtoolsDir + DirectorySeparator + 'manifest.json');
+      WriteLn('');
+      WriteLn('To install in Google Chrome / Brave / Edge:');
+      WriteLn('  1. Open your browser and navigate to: chrome://extensions');
+      WriteLn('  2. Toggle on "Developer mode" (top-right corner)');
+      WriteLn('  3. Click "Load unpacked" (top-left button)');
+      WriteLn('  4. Select the folder: ' + DevtoolsDir);
+      WriteLn('');
+      WriteLn('Once loaded, open your BlaiseVue app, press F12, and click the "BlaiseVue" tab!');
+      WriteLn('');
+    end
+    else
+    begin
+      CustomToolPath := GetGlobalToolsPath + TargetLower;
+      if DirectoryExists(CustomToolPath) then
+      begin
+        WriteLn('Custom tool "' + TargetLower + '" found in ' + CustomToolPath);
+        if FileExists(CustomToolPath + DirectorySeparator + 'install.ps1') then
+        begin
+          WriteLn('Executing installation script: install.ps1...');
+          {$IFDEF WINDOWS}
+          ExecuteProcess('powershell', '-File "' + CustomToolPath + DirectorySeparator + 'install.ps1"');
+          {$ELSE}
+          if FileExists(CustomToolPath + DirectorySeparator + 'install.sh') then
+            ExecuteProcess('/bin/sh', '"' + CustomToolPath + DirectorySeparator + 'install.sh"');
+          {$ENDIF}
+        end
+        else
+          WriteLn('Tool is ready at: ' + CustomToolPath);
+      end
+      else
+      begin
+        WriteLn('Error: Extension or tool "' + TargetLower + '" not found.');
+        WriteLn('Available built-in tools: blaise-vscode, blaise-lazarus, blaise-devtools');
+        WriteLn('User tools directory: ' + GetGlobalToolsPath);
+      end;
+    end;
+  end
+  else if (SubCmd = 'remove') or (SubCmd = 'rm') or (SubCmd = 'uninstall') then
+  begin
+    if TargetLower = '' then
+    begin
+      WriteLn('Error: Target extension or tool name required to remove.');
+      WriteLn('Usage: bv extension remove <target>');
+      WriteLn('');
+      WriteLn('Available targets:');
+      WriteLn('  blaise-vscode   - Uninstalls official VS Code / Antigravity IDE extension (alias: vscode)');
+      WriteLn('  <custom>        - Uninstalls a custom tool from ~/.blaisevue/tools/<name>');
+      Exit;
+    end;
+
+    if (TargetLower = 'blaise-vscode') or (TargetLower = 'vscode') then
+    begin
+      WriteLn('Removing BlaiseVue VS Code extension...');
+      {$IFDEF WINDOWS}
+      HomeDir := GetEnvironmentVariable('USERPROFILE');
+      if HomeDir = '' then HomeDir := GetEnvironmentVariable('APPDATA');
+      {$ELSE}
+      HomeDir := GetEnvironmentVariable('HOME');
+      {$ENDIF}
+      DeleteVSCodeExtension(HomeDir);
+      WriteLn('BlaiseVue VS Code extension removed successfully.');
+    end
+    else if (TargetLower = 'blaise-devtools') or (TargetLower = 'devtools') then
+    begin
+      WriteLn('The browser DevTools extension is a temporary/unpacked extension.');
+      WriteLn('To remove it, simply click "Remove" in your browser:');
+      WriteLn('  - Firefox: about:debugging#/runtime/this-firefox -> Remove');
+      WriteLn('  - Chrome / Edge: chrome://extensions -> Remove');
+    end
+    else
+    begin
+      CustomToolPath := GetGlobalToolsPath + TargetLower;
+      if DirectoryExists(CustomToolPath) then
+      begin
+        DeleteDir(CustomToolPath);
+        WriteLn('Custom tool "' + TargetLower + '" removed successfully from ~/.blaisevue/tools/.');
+      end
+      else
+        WriteLn('Error: Extension or tool "' + TargetLower + '" not found to remove.');
+    end;
+  end
+  else if (SubCmd = 'pack') or (SubCmd = 'package') or (SubCmd = 'pkg') or (SubCmd = 'vsix') then
+  begin
+    if (TargetLower = '') or (TargetLower = 'blaise-vscode') or (TargetLower = 'vscode') then
+    begin
+      ExtDir := GetBuiltinToolsPath + 'vscode-extension';
+      if not DirectoryExists(ExtDir) then
+        ExtDir := GetSDKPath + 'vscode-extension';
+      if not DirectoryExists(ExtDir) then
+      begin
+        WriteLn('Error: vscode-extension directory not found at: ' + ExtDir);
+        Exit;
+      end;
+      if not HasCommand('node') then
+      begin
+        PrintNodeRequiredError('package the VS Code extension (@vscode/vsce)');
+        Exit;
+      end;
+      WriteLn('Packaging BlaiseVue VS Code extension into .vsix bundle...');
+      {$IFDEF WINDOWS}
+      ExecuteProcess('cmd', '/c cd /d "' + ExtDir + '" && npx @vscode/vsce package --no-git-tag-version --allow-missing-repository');
+      {$ELSE}
+      ExecuteProcess('/bin/sh', '-c "cd ''' + ExtDir + ''' && npx @vscode/vsce package --no-git-tag-version --allow-missing-repository"');
+      {$ENDIF}
+      WriteLn('Packaging completed successfully!');
+    end
+    else
+    begin
+      CustomToolPath := GetGlobalToolsPath + TargetLower;
+      if DirectoryExists(CustomToolPath) then
+      begin
+        if not HasCommand('node') then
+        begin
+          PrintNodeRequiredError('package the extension (@vscode/vsce)');
+          Exit;
+        end;
+        WriteLn('Packaging custom extension at ' + CustomToolPath + '...');
+        {$IFDEF WINDOWS}
+        ExecuteProcess('cmd', '/c cd /d "' + CustomToolPath + '" && npx @vscode/vsce package --no-git-tag-version --allow-missing-repository');
+        {$ELSE}
+        ExecuteProcess('/bin/sh', '-c "cd ''' + CustomToolPath + ''' && npx @vscode/vsce package --no-git-tag-version --allow-missing-repository"');
+        {$ENDIF}
+      end
+      else
+        WriteLn('Error: Directory for extension "' + TargetLower + '" not found.');
+    end;
+  end
+  else
+  begin
+    WriteLn('Unknown subcommand: bv extension ' + SubCmd);
+    WriteLn('Available subcommands: list, install, remove, pack');
   end;
-
 end;
 
 
@@ -11048,7 +13513,7 @@ var
 
 begin
 
-  WriteLn('=== BlaiseVue 3.5 Mobile (Capacitor Engine) ===');
+  WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Mobile (Capacitor Engine) ===');
 
 
 
@@ -11196,7 +13661,12 @@ begin
 
 
 
-  if (SubCmd = 'init') then
+  if (SubCmd = 'remove') or (SubCmd = 'rm') or (SubCmd = 'del') then
+  begin
+    CmdRemoveMobile(IsRelease or (Arg1 = '-y') or (Arg1 = '--yes') or (Arg1 = '-f') or (Arg1 = '--force') or (Arg2 = '-y') or (Arg2 = '--yes') or (Arg2 = '-f') or (Arg2 = '--force'));
+    Exit;
+  end
+  else if (SubCmd = 'init') then
 
   begin
 
@@ -11791,7 +14261,7 @@ var
 
 begin
 
-  WriteLn('=== BlaiseVue 3.5 Desktop (WebUI & Lazarus IDE) ===');
+  WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Desktop (WebUI & Lazarus IDE) ===');
 
 
 
@@ -11883,7 +14353,12 @@ begin
 
 
 
-  if (SubCmd = 'init') then
+  if (SubCmd = 'remove') or (SubCmd = 'rm') or (SubCmd = 'del') then
+  begin
+    CmdRemoveDesktop(IsRelease or (Arg1 = '-y') or (Arg1 = '--yes') or (Arg1 = '-f') or (Arg1 = '--force') or (Arg2 = '-y') or (Arg2 = '--yes') or (Arg2 = '-f') or (Arg2 = '--force'));
+    Exit;
+  end
+  else if (SubCmd = 'init') then
 
   begin
 
@@ -23138,6 +25613,406 @@ begin
   end;
 end;
 
+// =====================================================================
+//  PACKAGE REPOSITORIES & ECOSYSTEM REGISTRY (bv repo)
+// =====================================================================
+
+function GetReposConfigPath: string;
+begin
+  Result := GetUserBlaiseVueDir + DirectorySeparator + 'repos.json';
+end;
+
+function LoadReposRegistry(out RootObj: TJSONObject): Boolean;
+var
+  ConfigFile, Raw: string;
+  Parser: TJSONParser;
+  Data: TJSONData;
+  DefaultRepo: TJSONObject;
+  ReposArr: TJSONArray;
+begin
+  Result := False;
+  RootObj := nil;
+  ConfigFile := GetReposConfigPath;
+  if (not FileExists(ConfigFile)) or (Trim(ReadFileToString(ConfigFile)) = '') then
+  begin
+    RootObj := TJSONObject.Create;
+    ReposArr := TJSONArray.Create;
+    DefaultRepo := TJSONObject.Create;
+    DefaultRepo.Add('name', 'official');
+    DefaultRepo.Add('url', 'https://github.com/affonsoelias/blaisevue-ecosystem');
+    DefaultRepo.Add('type', 'ecosystem');
+    DefaultRepo.Add('default', True);
+    ReposArr.Add(DefaultRepo);
+    RootObj.Add('repositories', ReposArr);
+    WriteStringToFile(ConfigFile, RootObj.FormatJSON);
+    Exit(True);
+  end;
+
+  Raw := ReadFileToString(ConfigFile);
+  Parser := TJSONParser.Create(Raw, True);
+  try
+    try
+      Data := Parser.Parse;
+      if Assigned(Data) and (Data.JSONType = jtObject) then
+      begin
+        RootObj := TJSONObject(Data);
+        Result := True;
+      end
+      else if Assigned(Data) then
+        Data.Free;
+    except
+      RootObj := nil;
+      Result := False;
+    end;
+  finally
+    Parser.Free;
+  end;
+end;
+
+procedure SaveReposRegistry(RootObj: TJSONObject);
+var
+  ConfigFile: string;
+begin
+  if not Assigned(RootObj) then Exit;
+  ConfigFile := GetReposConfigPath;
+  WriteStringToFile(ConfigFile, RootObj.FormatJSON);
+end;
+
+procedure CmdRepoList;
+var
+  RootObj, RepoObj: TJSONObject;
+  ReposArr: TJSONArray;
+  i: Integer;
+  RName, RUrl, RType: string;
+  IsDef: Boolean;
+begin
+  if not LoadReposRegistry(RootObj) then
+  begin
+    WriteLn('Error loading repositories registry at: ', GetReposConfigPath);
+    Exit;
+  end;
+  try
+    WriteLn('=== BlaiseVue Package Repositories ===');
+    WriteLn('Config: ' + GetReposConfigPath);
+    WriteLn('');
+    ReposArr := RootObj.Get('repositories', TJSONArray(nil));
+    if (not Assigned(ReposArr)) or (ReposArr.Count = 0) then
+    begin
+      WriteLn('  No repositories registered.');
+      Exit;
+    end;
+
+    for i := 0 to ReposArr.Count - 1 do
+    begin
+      if ReposArr.Types[i] = jtObject then
+      begin
+        RepoObj := TJSONObject(ReposArr.Objects[i]);
+        RName := RepoObj.Get('name', '');
+        RUrl := RepoObj.Get('url', '');
+        RType := RepoObj.Get('type', 'ecosystem');
+        IsDef := RepoObj.Get('default', False);
+
+        if IsDef then
+          WriteLn('  * ' + RName + ' (default)')
+        else
+          WriteLn('    ' + RName);
+        WriteLn('      URL:  ' + RUrl);
+        WriteLn('      Type: ' + RType);
+        WriteLn('');
+      end;
+    end;
+    WriteLn('Total: ' + IntToStr(ReposArr.Count) + ' configured repository(ies).');
+  finally
+    RootObj.Free;
+  end;
+end;
+
+procedure CmdRepoAdd(const Name, URL: string);
+var
+  RootObj, NewRepo, Existing: TJSONObject;
+  ReposArr: TJSONArray;
+  i: Integer;
+  CleanName, CleanURL: string;
+begin
+  CleanName := LowerCase(Trim(Name));
+  CleanURL := Trim(URL);
+  if (CleanName = '') or (CleanURL = '') then
+  begin
+    WriteLn('Usage: bv repo add <name> <url>');
+    WriteLn('Example: bv repo add community https://github.com/user/blaise-packages');
+    Exit;
+  end;
+
+  if not LoadReposRegistry(RootObj) then
+    RootObj := TJSONObject.Create;
+
+  try
+    ReposArr := RootObj.Get('repositories', TJSONArray(nil));
+    if not Assigned(ReposArr) then
+    begin
+      ReposArr := TJSONArray.Create;
+      RootObj.Add('repositories', ReposArr);
+    end;
+
+    for i := 0 to ReposArr.Count - 1 do
+    begin
+      if ReposArr.Types[i] = jtObject then
+      begin
+        Existing := TJSONObject(ReposArr.Objects[i]);
+        if LowerCase(Existing.Get('name', '')) = CleanName then
+        begin
+          WriteLn('Notice: Repository "' + CleanName + '" already exists with URL: ' + Existing.Get('url', ''));
+          Existing.Delete('url');
+          Existing.Add('url', CleanURL);
+          SaveReposRegistry(RootObj);
+          WriteLn('[SUCCESS] Repository "' + CleanName + '" updated with new URL: ' + CleanURL);
+          Exit;
+        end;
+      end;
+    end;
+
+    NewRepo := TJSONObject.Create;
+    NewRepo.Add('name', CleanName);
+    NewRepo.Add('url', CleanURL);
+    NewRepo.Add('type', 'ecosystem');
+    NewRepo.Add('default', False);
+    ReposArr.Add(NewRepo);
+
+    SaveReposRegistry(RootObj);
+    WriteLn('[SUCCESS] Repository "' + CleanName + '" added successfully!');
+    WriteLn('          URL: ' + CleanURL);
+  finally
+    RootObj.Free;
+  end;
+end;
+
+procedure CmdRepoRemove(const Name: string);
+var
+  RootObj, RepoObj: TJSONObject;
+  ReposArr: TJSONArray;
+  i: Integer;
+  CleanName: string;
+  Found: Boolean;
+begin
+  CleanName := LowerCase(Trim(Name));
+  if CleanName = '' then
+  begin
+    WriteLn('Usage: bv repo remove <name>');
+    Exit;
+  end;
+
+  if not LoadReposRegistry(RootObj) then
+  begin
+    WriteLn('Error loading repositories registry.');
+    Exit;
+  end;
+
+  try
+    ReposArr := RootObj.Get('repositories', TJSONArray(nil));
+    if not Assigned(ReposArr) then Exit;
+
+    Found := False;
+    for i := ReposArr.Count - 1 downto 0 do
+    begin
+      if ReposArr.Types[i] = jtObject then
+      begin
+        RepoObj := TJSONObject(ReposArr.Objects[i]);
+        if LowerCase(RepoObj.Get('name', '')) = CleanName then
+        begin
+          ReposArr.Delete(i);
+          Found := True;
+        end;
+      end;
+    end;
+
+    if Found then
+    begin
+      SaveReposRegistry(RootObj);
+      WriteLn('[SUCCESS] Repository "' + CleanName + '" removed successfully!');
+    end
+    else
+      WriteLn('Repository "' + CleanName + '" not found.');
+  finally
+    RootObj.Free;
+  end;
+end;
+
+procedure CmdRepoDefault(const Name: string);
+var
+  RootObj, RepoObj: TJSONObject;
+  ReposArr: TJSONArray;
+  i: Integer;
+  CleanName: string;
+  Found: Boolean;
+begin
+  CleanName := LowerCase(Trim(Name));
+  if CleanName = '' then
+  begin
+    WriteLn('Usage: bv repo default <name>');
+    Exit;
+  end;
+
+  if not LoadReposRegistry(RootObj) then Exit;
+
+  try
+    ReposArr := RootObj.Get('repositories', TJSONArray(nil));
+    if not Assigned(ReposArr) then Exit;
+
+    Found := False;
+    for i := 0 to ReposArr.Count - 1 do
+    begin
+      if ReposArr.Types[i] = jtObject then
+      begin
+        RepoObj := TJSONObject(ReposArr.Objects[i]);
+        if LowerCase(RepoObj.Get('name', '')) = CleanName then
+        begin
+          RepoObj.Delete('default');
+          RepoObj.Add('default', True);
+          Found := True;
+        end
+        else
+        begin
+          RepoObj.Delete('default');
+          RepoObj.Add('default', False);
+        end;
+      end;
+    end;
+
+    if Found then
+    begin
+      SaveReposRegistry(RootObj);
+      WriteLn('[SUCCESS] Repository "' + CleanName + '" set as default!');
+    end
+    else
+      WriteLn('Repository "' + CleanName + '" not found.');
+  finally
+    RootObj.Free;
+  end;
+end;
+
+procedure CmdRepoSync;
+var
+  RootObj, RepoObj: TJSONObject;
+  ReposArr: TJSONArray;
+  i: Integer;
+  RName, RUrl, RawUrl, CacheDir, CacheFile: string;
+  Client: TFPHTTPClient;
+  Resp: string;
+  CatParser: TJSONParser;
+  CatData: TJSONData;
+  PkgObj: TJSONObject;
+  PkgCount: Integer;
+begin
+  if not LoadReposRegistry(RootObj) then Exit;
+
+  CacheDir := ExtractFileDir(GetReposConfigPath) + DirectorySeparator + 'cache';
+  ForceDir(CacheDir);
+
+  WriteLn('=== Synchronizing BlaiseVue Repositories Catalog ===');
+  try
+    ReposArr := RootObj.Get('repositories', TJSONArray(nil));
+    if not Assigned(ReposArr) then Exit;
+
+    for i := 0 to ReposArr.Count - 1 do
+    begin
+      if ReposArr.Types[i] = jtObject then
+      begin
+        RepoObj := TJSONObject(ReposArr.Objects[i]);
+        RName := RepoObj.Get('name', '');
+        RUrl := RepoObj.Get('url', '');
+
+        RawUrl := RUrl;
+        if Pos('github.com/', RawUrl) > 0 then
+        begin
+          RawUrl := StringReplace(RawUrl, 'github.com/', 'raw.githubusercontent.com/', []);
+          if Copy(RawUrl, Length(RawUrl) - 3, 4) = '.git' then
+            Delete(RawUrl, Length(RawUrl) - 3, 4);
+          RawUrl := RawUrl + '/main/ecosystem.json';
+        end;
+
+        Write('  [+] Synchronizing "' + RName + '" ... ');
+        Client := TFPHTTPClient.Create(nil);
+        try
+          try
+            Client.AllowRedirect := True;
+            Resp := Client.Get(RawUrl);
+            CacheFile := CacheDir + DirectorySeparator + RName + '-ecosystem.json';
+            WriteStringToFile(CacheFile, Resp);
+
+            PkgCount := 0;
+            CatParser := TJSONParser.Create(Resp, True);
+            try
+              CatData := CatParser.Parse;
+              if Assigned(CatData) and (CatData.JSONType = jtObject) then
+              begin
+                PkgObj := TJSONObject(CatData).Get('packages', TJSONObject(nil));
+                if Assigned(PkgObj) then PkgCount := PkgObj.Count;
+              end;
+              if Assigned(CatData) then CatData.Free;
+            finally
+              CatParser.Free;
+            end;
+
+            WriteLn('OK (' + IntToStr(PkgCount) + ' package(s) available)');
+          except
+            on E: Exception do
+              WriteLn('FAILED (' + E.Message + ')');
+          end;
+        finally
+          Client.Free;
+        end;
+      end;
+    end;
+    WriteLn('Synchronization completed successfully!');
+  finally
+    RootObj.Free;
+  end;
+end;
+
+procedure CmdRepo;
+var
+  SubCmd: string;
+  Idx: Integer;
+begin
+  if SameText(ParamStr(1), 'lib') then
+    Idx := 3
+  else
+    Idx := 2;
+
+  if ParamCount < Idx then
+  begin
+    CmdRepoList;
+    Exit;
+  end;
+
+  SubCmd := LowerCase(ParamStr(Idx));
+  if (SubCmd = 'list') or (SubCmd = 'ls') then
+    CmdRepoList
+  else if SubCmd = 'add' then
+    CmdRepoAdd(ParamStr(Idx + 1), ParamStr(Idx + 2))
+  else if (SubCmd = 'remove') or (SubCmd = 'rm') or (SubCmd = 'del') then
+    CmdRepoRemove(ParamStr(Idx + 1))
+  else if (SubCmd = 'default') or (SubCmd = 'use') then
+    CmdRepoDefault(ParamStr(Idx + 1))
+  else if (SubCmd = 'sync') or (SubCmd = 'update') then
+    CmdRepoSync
+  else if (SubCmd = 'search') or (SubCmd = 'find') then
+    CmdLibSearch(ParamStr(Idx + 1))
+  else
+  begin
+    WriteLn('Unknown command: bv repo ' + SubCmd);
+    WriteLn('Available subcommands:');
+    WriteLn('  bv repo list               List registered repositories');
+    WriteLn('  bv repo add <name> <url>   Register a new repository');
+    WriteLn('  bv repo remove <name>      Remove a repository');
+    WriteLn('  bv repo default <name>     Set the default repository');
+    WriteLn('  bv repo sync               Update package catalog');
+    WriteLn('  bv repo search <term>      Search packages across repositories');
+    Halt(1);
+  end;
+end;
+
+
 procedure SplitTokens(const S: string; Tokens: TStringList);
 var
   i: Integer;
@@ -23446,6 +26321,12 @@ begin
         WriteLn('    desktop <run|build|sync>   Native desktop app via Lazarus & WebUI');
         WriteLn('    studio                     Launches BlaiseVue Studio developer cockpit');
         WriteLn('    theme <list|use <name>>    Inspects or changes project UI theme');
+        WriteLn('');
+        WriteLn('  Compiler Paths & Legacy Units:');
+        WriteLn('    path [list]                Lists active search paths in app.cfg');
+        WriteLn('    path add <dir|pas2js:p>    Links a folder or official Pas2JS package');
+        WriteLn('    path remove <target>       Removes a search path from app.cfg');
+        WriteLn('    path available             Lists all available built-in Pas2JS packages');
         WriteLn('');
         WriteLn('  Shell Passthrough:');
         WriteLn('    cls / clear                Clears terminal screen');
@@ -24844,18 +27725,24 @@ end;
 
 var
 
-  Cmd, TypeArg, NameArg, DirArg, DummyRenamed: string;
+  Cmd, TypeArg, NameArg, DirArg, DummyRenamed, PkgNameArg, CurP: string;
 
-  SkipTest, SkipTestsArg: Boolean;
+  SkipTest, SkipTestsArg, IsGlobalArg: Boolean;
 
   i: Integer;
 
 begin
 
+  if (ParamCount = 1) and ((ParamStr(1) = '--version') or (ParamStr(1) = '-v') or (ParamStr(1) = 'version')) then
+  begin
+    WriteLn('BlaiseVue CLI v' + GetCliVersion + ' (Universal Pascal Full-Stack Platform)');
+    Halt(0);
+  end;
+
   if (ParamCount < 1) or (ParamStr(1) = 'help') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') then
   begin
     WriteLn('');
-    WriteLn('  BlaiseVue CLI v4.4.0 (Universal Pascal Full-Stack Platform)');
+    WriteLn('  BlaiseVue CLI v' + GetCliVersion + ' (Universal Pascal Full-Stack Platform)');
     WriteLn('  ============================================================');
     WriteLn('  Usage: bv <command> [options]');
     WriteLn('');
@@ -24877,7 +27764,7 @@ begin
     WriteLn('  bv g v <Name>              Scaffolds a route view (.bv) & test in tests/views/ (alias: bv new v)');
     WriteLn('  bv g s <Name>              Scaffolds a pure Pascal domain service in src/services/ (alias: bv new s)');
     WriteLn('  bv g t <Name>              Scaffolds a Pascal test file (.test.pas) (alias: bv new t)');
-    WriteLn('  bv remove <c|v|s|t> <Name> Safely deletes a component, view, service, or test');
+    WriteLn('  bv remove <c|v|s|t|m|d> [Name] Safely deletes a component, view, service, test, or platform (m/d)');
     WriteLn('  bv list <c|v|s|t|lib>      Lists project components, views, services, tests, or installed libs');
     WriteLn('  bv rename <c|v|s|p>        Smart rename for services, components, views, or project name');
     WriteLn('');
@@ -24896,6 +27783,8 @@ begin
     WriteLn('');
     WriteLn('  # === Multiplatform (Mobile & Desktop) ===');
     WriteLn('  bv mobile init [name] [id] Configures Capacitor and scaffolds Android/iOS project');
+    WriteLn('  bv mobile remove [-y]      Safely deletes mobile/ and capacitor.config.json');
+    WriteLn('  bv desktop remove [-y]     Safely deletes desktop/ native wrapper project');
     WriteLn('  bv mobile sync             Syncs dist/ with native Android assets');
     WriteLn('  bv mobile open             Syncs and opens Android Studio');
     WriteLn('  bv mobile build            Builds native Android Debug APK via Gradle');
@@ -24905,18 +27794,28 @@ begin
     WriteLn('  bv desktop run [target]    Builds and launches desktop app for target');
     WriteLn('');
     WriteLn('  # === Package & Theme Management ===');
-    WriteLn('  bv lib install <pkg|url>   Installs official package (themes, icons, ui, mobile) or from URL');
-    WriteLn('  bv lib remove <name>       Removes an installed component or package from lib/');
+    WriteLn('  bv repo <list|add|remove|default|sync|search> Manages package repositories & ecosystem sources');
+    WriteLn('  bv lib install [<repo>:]<pkg[@ver]|url> [--global|-g] Installs package in project /lib or user cache');
+    WriteLn('  bv lib remove <name> [--global|-g] Removes package from lib/ or global cache');
+    WriteLn('  bv lib update [[<repo>:]name] [--global|-g] Updates package(s) to latest version');
+    WriteLn('  bv lib outdated [--global|-g] Checks for available updates in installed packages');
+    WriteLn('  bv lib list [--global|-g]  Lists installed libraries');
+    WriteLn('  bv lib search [[<repo>:]term] Searches packages in registered repositories');
     WriteLn('  bv lib pack [dir]          Assembles & verifies release artifact (.zip with SHA-256)');
     WriteLn('  bv theme list              Lists all available installed themes');
     WriteLn('  bv theme use <name>        Sets default project theme in index.html (e.g. darkly, lux)');
-    WriteLn('  bv extension [install|pkg] Installs or packages official VS Code extension');
-    WriteLn('  bv vsix                    Packages standalone VS Code extension (.vsix)');
+    WriteLn('  bv extension <list|install|remove|pack> [target] Manages development extensions & tools');
     WriteLn('');
     WriteLn('  # === Project Metadata & Licensing ===');
     WriteLn('  bv license [list|show|set] Manages project license (MIT, Apache, LGPL, GPL, BSD, etc.)');
-    WriteLn('  bv meta [show|get|set|bump] Manages project metadata and syncs SemVer with src/uAppVersion.pas');
+    WriteLn('  bv meta [show|get|set|bump|sync] Manages project metadata and syncs SemVer across monorepo');
     WriteLn('  bv reset [--bare] [--force] Resets project to a clean slate (protected against demo-app)');
+    WriteLn('');
+    WriteLn('  # === Compiler Search Paths & Legacy Migration ===');
+    WriteLn('  bv path [list]             Lists all active unit search paths (-Fu) in app.cfg');
+    WriteLn('  bv path add <dir|pas2js:p> Adds a folder or official Pas2JS package to app.cfg');
+    WriteLn('  bv path remove <target>    Removes a search path or Pas2JS package from app.cfg');
+    WriteLn('  bv path available          Lists all built-in Pas2JS packages available to link');
     WriteLn('');
     WriteLn('  # === Framework Diagnostics & Git Auto-Updater ===');
     WriteLn('  bv doctor                  Diagnoses environment tools (Git, Lazarus, FPC, Pas2JS, Node)');
@@ -25087,50 +27986,62 @@ begin
 
   end
 
-  else if Cmd = 'remove' then
-
+  else if (Cmd = 'remove') or (Cmd = 'rm') or (Cmd = 'del') then
   begin
-
-    if (ParamCount < 3) then
-
+    if (ParamCount < 2) then
     begin
-
-      WriteLn('Usage: bv remove <c|v|s|t> <Name>');
-
-      WriteLn('Types: component (c), view (v), service (s), test (t)');
-
+      WriteLn('Usage: bv remove <c|v|s|t|m|d> [Name]');
+      WriteLn('Types: component (c), view (v), service (s), test (t), mobile (m), desktop (d)');
       Halt(1);
-
     end;
 
     TypeArg := LowerCase(ParamStr(2));
-
-    NameArg := ParamStr(3);
-
-    if (TypeArg = 'c') or (TypeArg = 'comp') or (TypeArg = 'component') then
-
-      CmdRemoveComponent(NameArg)
-
-    else if (TypeArg = 'v') or (TypeArg = 'view') then
-
-      CmdRemoveView(NameArg)
-    else if (TypeArg = 's') or (TypeArg = 'service') or (TypeArg = 'serv') then
-      CmdRemoveService(NameArg)
-
-    else if (TypeArg = 't') or (TypeArg = 'test') then
-
-      CmdRemoveTest(NameArg)
-
-    else
-
+    if (TypeArg = 'mobile') or (TypeArg = 'm') then
     begin
-
-      WriteLn('Unknown type: ', ParamStr(2), '. Use "component" (c), "view" (v), "service" (s) or "test" (t).');
-
-      Halt(1);
-
+      CmdRemoveMobile((ParamCount >= 3) and ((ParamStr(3) = '-y') or (ParamStr(3) = '--yes') or (ParamStr(3) = '-f') or (ParamStr(3) = '--force')));
+    end
+    else if (TypeArg = 'desktop') or (TypeArg = 'd') then
+    begin
+      CmdRemoveDesktop((ParamCount >= 3) and ((ParamStr(3) = '-y') or (ParamStr(3) = '--yes') or (ParamStr(3) = '-f') or (ParamStr(3) = '--force')));
+    end
+    else
+    begin
+      if (ParamCount < 3) then
+      begin
+        WriteLn('Usage: bv remove <c|v|s|t> <Name>');
+        WriteLn('Types: component (c), view (v), service (s), test (t), mobile (m), desktop (d)');
+        Halt(1);
+      end;
+      NameArg := ParamStr(3);
+      if (TypeArg = 'c') or (TypeArg = 'comp') or (TypeArg = 'component') then
+        CmdRemoveComponent(NameArg)
+      else if (TypeArg = 'v') or (TypeArg = 'view') then
+        CmdRemoveView(NameArg)
+      else if (TypeArg = 's') or (TypeArg = 'service') or (TypeArg = 'serv') then
+        CmdRemoveService(NameArg)
+      else if (TypeArg = 't') or (TypeArg = 'test') then
+        CmdRemoveTest(NameArg)
+      else if (TypeArg = 'lib') or (TypeArg = 'l') then
+      begin
+        IsGlobalArg := False;
+        PkgNameArg := '';
+        for i := 3 to ParamCount do
+        begin
+          CurP := ParamStr(i);
+          if (CurP = '--global') or (CurP = '-g') then
+            IsGlobalArg := True
+          else if PkgNameArg = '' then
+            PkgNameArg := CurP;
+        end;
+        if PkgNameArg = '' then PkgNameArg := NameArg;
+        CmdLibRemove(PkgNameArg, IsGlobalArg);
+      end
+      else
+      begin
+        WriteLn('Unknown type: ', ParamStr(2), '. Use "component" (c), "view" (v), "service" (s), "test" (t), "mobile" (m) or "desktop" (d).');
+        Halt(1);
+      end;
     end;
-
   end
 
   else if Cmd = 'list' then
@@ -25147,12 +28058,14 @@ begin
 
     end;
 
-    if (ParamStr(2) = 'lib') then
-
-      CmdLibList
-
+    if (ParamStr(2) = 'lib') or (ParamStr(2) = 'libs') then
+    begin
+      IsGlobalArg := False;
+      for i := 3 to ParamCount do
+        if (ParamStr(i) = '--global') or (ParamStr(i) = '-g') then IsGlobalArg := True;
+      CmdLibList(IsGlobalArg);
+    end
     else
-
       CmdList(ParamStr(2));
 
   end
@@ -25165,7 +28078,7 @@ begin
 
     begin
 
-       WriteLn('Usage: bv s <nome-do-componente>');
+       WriteLn('Usage: bv s <component-name>');
 
        Halt(1);
 
@@ -25176,71 +28089,121 @@ begin
   end
 
   else if Cmd = 'lib' then
-
   begin
-
     if (ParamCount < 2) then
-
     begin
-
-       WriteLn('Usage: bv lib <list|install|remove> [params]');
-
+       WriteLn('Usage: bv lib <list|install|remove|update|search|repo|pack> [params]');
        Halt(1);
-
     end;
-
     Cmd := LowerCase(ParamStr(2));
-
-    if Cmd = 'list' then CmdLibList
-
-    else if Cmd = 'install' then
-
+    if Cmd = 'list' then
     begin
-
-       if ParamCount < 3 then begin WriteLn('Usage: bv lib install <url>'); Halt(1); end;
-
-       CmdLibInstall(ParamStr(3));
-
-    end
-
-    else if Cmd = 'remove' then
-
-    begin
-
-       if ParamCount < 3 then begin WriteLn('Usage: bv lib remove <name>'); Halt(1); end;
-
-       CmdLibRemove(ParamStr(3));
-
-    end
-
-    else if (Cmd = 'pack') or (Cmd = 'dist') then
-
-    begin
-
-      DirArg := '';
-
-      SkipTestsArg := False;
-
+      IsGlobalArg := False;
       for i := 3 to ParamCount do
-
+        if (ParamStr(i) = '--global') or (ParamStr(i) = '-g') then IsGlobalArg := True;
+      CmdLibList(IsGlobalArg);
+    end
+    else if Cmd = 'install' then
+    begin
+      if ParamCount < 3 then begin WriteLn('Usage: bv lib install [<repo>:]<package[@version]|url> [--global|-g]'); Halt(1); end;
+      IsGlobalArg := False;
+      PkgNameArg := '';
+      for i := 3 to ParamCount do
       begin
-
-        if (LowerCase(ParamStr(i)) = '--skip-tests') or (LowerCase(ParamStr(i)) = '-s') then
-
-          SkipTestsArg := True
-
-        else if DirArg = '' then
-
-          DirArg := ParamStr(i);
-
+        CurP := ParamStr(i);
+        if (CurP = '--global') or (CurP = '-g') then IsGlobalArg := True
+        else if PkgNameArg = '' then PkgNameArg := CurP;
       end;
-
+      if PkgNameArg = '' then begin WriteLn('Usage: bv lib install [<repo>:]<package[@version]|url> [--global|-g]'); Halt(1); end;
+      CmdLibInstall(PkgNameArg, IsGlobalArg);
+    end
+    else if Cmd = 'remove' then
+    begin
+      if ParamCount < 3 then begin WriteLn('Usage: bv lib remove <name> [--global|-g]'); Halt(1); end;
+      IsGlobalArg := False;
+      PkgNameArg := '';
+      for i := 3 to ParamCount do
+      begin
+        CurP := ParamStr(i);
+        if (CurP = '--global') or (CurP = '-g') then IsGlobalArg := True
+        else if PkgNameArg = '' then PkgNameArg := CurP;
+      end;
+      if PkgNameArg = '' then begin WriteLn('Usage: bv lib remove <name> [--global|-g]'); Halt(1); end;
+      CmdLibRemove(PkgNameArg, IsGlobalArg);
+    end
+    else if (Cmd = 'update') or (Cmd = 'upgrade') then
+    begin
+      IsGlobalArg := False;
+      PkgNameArg := '';
+      for i := 3 to ParamCount do
+      begin
+        CurP := ParamStr(i);
+        if (CurP = '--global') or (CurP = '-g') then IsGlobalArg := True
+        else if PkgNameArg = '' then PkgNameArg := CurP;
+      end;
+      CmdLibUpdate(PkgNameArg, IsGlobalArg);
+    end
+    else if (Cmd = 'outdated') or (Cmd = 'check-updates') then
+    begin
+      IsGlobalArg := False;
+      for i := 3 to ParamCount do
+        if (ParamStr(i) = '--global') or (ParamStr(i) = '-g') then IsGlobalArg := True;
+      CmdLibOutdated(IsGlobalArg);
+    end
+    else if (Cmd = 'search') or (Cmd = 'find') then
+    begin
+      PkgNameArg := '';
+      if ParamCount >= 3 then PkgNameArg := ParamStr(3);
+      CmdLibSearch(PkgNameArg);
+    end
+    else if (Cmd = 'repo') or (Cmd = 'repositories') then
+    begin
+       CmdRepo;
+    end
+    else if (Cmd = 'pack') or (Cmd = 'dist') then
+    begin
+      DirArg := '';
+      SkipTestsArg := False;
+      for i := 3 to ParamCount do
+      begin
+        if (LowerCase(ParamStr(i)) = '--skip-tests') or (LowerCase(ParamStr(i)) = '-s') then
+          SkipTestsArg := True
+        else if DirArg = '' then
+          DirArg := ParamStr(i);
+      end;
       CmdLibPack(DirArg, SkipTestsArg);
-
+    end
+    else
+    begin
+      WriteLn('Unknown command: bv lib ', Cmd);
+      WriteLn('Available subcommands: list, install, remove, update, outdated, search, repo, pack');
+      Halt(1);
     end;
-
   end
-
+  else if (Cmd = 'install') or (Cmd = 'i') then
+  begin
+    if ParamCount < 2 then
+    begin
+      WriteLn('Usage: bv install <package[@version]|url> [--global|-g]');
+      Halt(1);
+    end;
+    IsGlobalArg := False;
+    PkgNameArg := '';
+    for i := 2 to ParamCount do
+    begin
+      CurP := ParamStr(i);
+      if (CurP = '--global') or (CurP = '-g') then
+        IsGlobalArg := True
+      else if PkgNameArg = '' then
+        PkgNameArg := CurP;
+    end;
+    if PkgNameArg = '' then
+    begin
+      WriteLn('Usage: bv install <package[@version]|url> [--global|-g]');
+      Halt(1);
+    end;
+    CmdLibInstall(PkgNameArg, IsGlobalArg);
+  end
   else if Cmd = 'theme' then
 
   begin
@@ -25367,7 +28330,11 @@ begin
 
     if Cmd = 'vsix' then
 
-      CmdExtension('package')
+      CmdExtension('pack', 'vscode')
+
+    else if ParamCount >= 3 then
+
+      CmdExtension(LowerCase(ParamStr(2)), ParamStr(3))
 
     else if ParamCount >= 2 then
 
@@ -25375,7 +28342,7 @@ begin
 
     else
 
-      CmdExtension('install');
+      CmdExtension('list');
 
   end
 
@@ -25445,6 +28412,11 @@ begin
 
   end
 
+  else if (Cmd = 'format') or (Cmd = 'fmt') then
+  begin
+    CmdFormat(ParamStr(2), (LowerCase(ParamStr(2)) = '--check') or (LowerCase(ParamStr(3)) = '--check'));
+  end
+
   else if Cmd = 'license' then
 
   begin
@@ -25461,6 +28433,14 @@ begin
 
   end
 
+  else if (Cmd = 'path') or (Cmd = 'paths') or (Cmd = 'unit-path') then
+  begin
+    CmdPath;
+  end
+  else if (Cmd = 'lazarus') or (Cmd = 'laz') or (Cmd = 'lpi') then
+  begin
+    CmdLazarus;
+  end
   else if Cmd = 'reset' then
   begin
     CmdReset;
@@ -25499,6 +28479,10 @@ begin
   else if (Cmd = 'project') or (Cmd = 'p') then
   begin
     CmdProject;
+  end
+  else if (Cmd = 'repo') or (Cmd = 'repository') then
+  begin
+    CmdRepo;
   end
   else if (Cmd = 'rename') or (Cmd = 'ren') or (Cmd = 'mv') then
   begin

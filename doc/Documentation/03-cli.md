@@ -4,6 +4,19 @@ The `bv.exe` is the native command-line orchestrator of BlaiseVue, responsible f
 
 ---
 
+### 🏷️ Version Inspection (`bv --version` / `bv -v`)
+
+Outputs the dynamic framework version derived from the Single Source of Truth (`package.json`):
+
+```bash
+bv --version
+# Output: BlaiseVue CLI v4.4.0 (Universal Pascal Full-Stack Platform)
+
+bv -v
+```
+
+---
+
 ## 🏗️ Development and Serving Commands
 
 ### 1. `bv dev` / `bv serve` (Development Server with Instant HMR)
@@ -193,14 +206,97 @@ bv lib dist
 
 ---
 
-## 📦 Library & Package Management (`/lib`)
+## 📦 Package Management, Ecosystem & Registries
 
-BlaiseVue includes an integrated package manager and library system:
-- **Official Package Aliases (`bv lib install <name>`)**:
-  - `bv lib install themes`: Installs the 9 official Bootswatch themes and theme switcher components into `lib/themes/`.
-  - `bv lib install icons`: Installs the Bootstrap Icons suite (styles + woff2 fonts) into `lib/icons/`.
-  - `bv lib install ui`: Installs the official BlaiseUI component suite into `lib/blaise-ui/`.
-  - `bv lib install <url>`: Downloads, extracts, and configures third-party libraries from any `.zip` URL.
+BlaiseVue features a modern, multi-tier package manager designed for zero-conflict SDK updates, SemVer version pinning, global offline caching, and decentralized repositories.
+
+### 1. Package Repositories (`bv repo`)
+Manages upstream catalog sources and multi-package ecosystem repositories configured in `~/.blaisevue/repos.json`:
+
+```bash
+# List all registered repositories (* denotes default active catalog):
+bv repo list
+
+# Register an external community or private repository:
+bv repo add community https://github.com/my-org/my-blaise-packages
+
+# Set default primary repository for package resolution:
+bv repo default community
+
+# Remove a registered repository:
+bv repo remove community
+
+# Synchronize and cache ecosystem catalog metadata locally:
+bv repo sync
+
+# Search packages across all registered repositories:
+bv repo search chart
+```
+
+### 2. Package Installation & Resolution (`bv lib install`)
+Installs packages using a 4-tier resolution strategy:
+1. **Local Project (`/lib/<pkg>`)**: Reuses project-installed libraries if the requested version matches.
+2. **User Global Cache (`~/.blaisevue/packages/<pkg>`)**: Instant offline installation in milliseconds when cached.
+3. **Core Framework (`packages/core/<pkg>`)**: Shielded built-in libraries (`blaise-ui`, `blaise-themes`, `blaise-icons`, `blaise-charts`, `blaise-reports`, `blaise-studio`).
+4. **Remote Ecosystem (GitHub Releases)**: Automatically downloads versioned `.zip` release assets, updates global cache, and installs into the project.
+
+```bash
+# Install latest version of an ecosystem package into project /lib:
+bv lib install test
+
+# Install a specific pinned version:
+bv lib install test@1.0.0
+
+# Install from a specific repository (<repo>:<package>[@version]):
+bv lib install official:test@1.1.0
+bv lib install myrepo:my-widget
+
+# Install directly into user global cache (~/.blaisevue/packages/):
+bv lib install test --global # (or alias: -g)
+
+# Install official core packages:
+bv lib install ui        # Installs complete BlaiseUI suite into lib/blaise-ui/
+bv lib install themes    # Installs Bootswatch themes into lib/themes/
+bv lib install icons     # Installs Bootstrap Icons fonts & CSS into lib/icons/
+bv lib install charts    # Installs Chart.js suite into lib/blaise-charts/
+bv lib install reports   # Installs BlaiseReports PDF generator into lib/blaise-reports/
+
+# Install from arbitrary URL or local .zip archive:
+bv lib install https://example.com/vendor-package.zip
+```
+
+### 3. Inspection & Updates (`bv lib outdated` & `bv lib update`)
+Inspects SemVer discrepancies and upgrades packages seamlessly:
+
+```bash
+# Inspect outdated packages comparing local versions against remote ecosystem:
+bv lib outdated
+
+# Inspect user global cache for outdated packages:
+bv lib outdated --global
+
+# Upgrade all installed packages to latest versions:
+bv lib update
+
+# Upgrade a specific package:
+bv lib update test
+```
+
+### 4. Removal & Listing (`bv lib remove` & `bv lib list`)
+```bash
+# List installed libraries in current project /lib:
+bv lib list
+
+# List packages in user global cache:
+bv lib list --global
+
+# Safely remove a package from project /lib (runs setup.pas cleanup if present):
+bv lib remove test
+
+# Remove a package from user global cache:
+bv lib remove test --global
+```
+
 - **Theme Switcher CLI (`bv theme`)**:
   - `bv theme list`: Lists all installed Bootswatch themes in `lib/themes/`.
   - `bv theme use <name>`: Updates the active project stylesheet link in `public/index.html` (e.g. `bv theme use darkly`).
@@ -221,13 +317,22 @@ Manages WebAssembly modules in the project and executes performance benchmarks c
 ### 3. `bv run ssg` (Static Site Generation & Pre-rendering)
 Pre-renders all registered application routes into static, SEO-friendly HTML files with zero-flicker reactive client-side hydration.
 
-### 4. `bv vsix` / `bv extension [install|package]` (VS Code Official Extension)
-Packages the official BlaiseVue extension into a standalone `.vsix` bundle for Visual Studio Code and VSCodium, featuring triple syntax highlighting, intelligent auto-completion, and an extensive snippet library. The `bv extension install` command installs the extension directly into the local editor.
+### 4. `bv extension <list|install|remove|pack> [target]` (Development Tools & Extensions)
+Manages built-in framework developer tooling (`packages/tools/`) and user-level custom extensions (`~/.blaisevue/tools/`):
+- `bv extension list`: Inspects available extensions (`blaise-vscode`, `blaise-lazarus`, `blaise-devtools`, and custom tools) and their installation status and versions.
+- `bv extension install <target>`: Installs a specific target extension:
+  - `bv extension install blaise-vscode` (alias: `vscode`): Deploys the official VS Code / Antigravity IDE / Cursor extension (`~/.vscode/extensions/`, `~/.antigravity/extensions/`). After running this command, reload the window via `Ctrl + Shift + P` $\rightarrow$ `Developer: Reload Window` (or restart the IDE). Alternatively, install the pre-packaged `.vsix` manually through the Extensions UI (*Install from VSIX...*) or via terminal (`code --install-extension packages/tools/vscode-extension/blaisevue-vscode-4.4.0.vsix`).
+  - `bv extension install blaise-lazarus` (alias: `lazarus`): Compiles and validates the official Lazarus IDE package (`blaisevue_ide.lpk`) using `lazbuild`.
+  - `bv extension install blaise-devtools` (alias: `devtools`): Displays step-by-step instructions for loading the DevTools panel in Mozilla Firefox (`about:debugging`) and Google Chrome (`chrome://extensions`).
+  - `bv extension install <tool>`: Executes the custom installer from `~/.blaisevue/tools/<name>/install.ps1` (or `install.sh`).
+- `bv extension remove <target>`: Uninstalls a specific extension (e.g. `bv extension remove blaise-vscode` or `bv extension remove <tool>`).
+- `bv extension pack [target]`: Compiles and packages the extension into an installable standalone `.vsix` bundle using `@vscode/vsce`.
 
 ### 5. `bv mobile` (Hybrid Mobile Platform Android / iOS & Capacitor)
 Manages the complete mobile development lifecycle using Capacitor within a unified `mobile/` architecture:
 - **`bv mobile init [name] [id]`**: Scaffolds the mobile directory structure inside `mobile/` (`mobile/android/`, `mobile/ios/`, `mobile/bin/android/`, `mobile/bin/ios/`, `mobile/README.md`) and configures `capacitor.config.json`.
 - **`bv mobile sync [android|ios|all]`**: Synchronizes the production build (`dist/`) with the selected native mobile platforms.
+- **`bv mobile remove [-y]`**: Safely removes the `mobile/` directory, `capacitor.config.json`, and mobile binaries (alias: `bv remove mobile` / `bv remove m`).
 - **`bv mobile build [target] [--release]`**: Compiles ready-to-install native packages (`.apk` / `.aab` / `.ipa`).
   - E.g.: `bv mobile build android` (Generates `mobile/bin/android/<App>-debug.apk` via Gradle `assembleDebug`)
   - E.g.: `bv mobile build android --release` (Generates `mobile/bin/android/<App>-release.apk` optimized with R8/ProGuard)
@@ -257,6 +362,7 @@ Manages the complete mobile development lifecycle using Capacitor within a unifi
 Manages the native desktop development lifecycle with Free Pascal and WebUI:
 - **`bv desktop init [name]`**: Scaffolds the Lazarus project structure (`.lpi`, `.lpr`, `webui.pas`, `uDesktopBridge.pas`, `assets/`, `bin/`, `units/`, `README.md`) inside `desktop/`.
 - **`bv desktop sync`**: Synchronizes the production web build (`dist/`) into desktop application assets (`desktop/assets/`).
+- **`bv desktop remove [-y]`**: Safely removes the `desktop/` directory and desktop binaries (alias: `bv remove desktop` / `bv remove d`).
 - **`bv desktop build [target] [--release]`**: Compiles native binaries for a specific platform (`windows`, `linux`, `macos`, or `all`). Defaults to the host OS if not specified.
   - E.g.: `bv desktop build windows` (Debug mode on Windows with active logging console)
   - E.g.: `bv desktop build linux --release` (Release mode for Linux in `desktop/bin/linux/`)
@@ -304,6 +410,24 @@ Manages high-throughput native Pascal backend microservices and zero-configurati
 | `bv mormot deploy` | `--zip` | Creates standalone `deploy.zip` archive |
 
 See detailed documentation in **[37. Full-Stack Pascal with mORMot 2](37-mormot2-backend.md)**.
+
+### 8. `bv path` (Compiler Search Paths & Legacy Migration)
+Manages Pas2JS compiler search paths (`-Fu`) in `app.cfg`, linking official built-in Pas2JS packages and mapping legacy Lazarus/Delphi codebases:
+- **`bv path [list]`**: Displays all active search paths grouped by category (Core Framework, Official Pas2JS Packages, and Custom/Legacy Search Paths).
+- **`bv path add <dir | pas2js:<package>>`**: Appends a new search path (`-Fu`) to `app.cfg` with automatic path normalization and duplicate prevention.
+  - E.g.: `bv path add pas2js:chartjs` (Links official Chart.js bindings)
+  - E.g.: `bv path add ../legacy/business_logic` (Imports legacy Lazarus/Delphi units)
+- **`bv path remove <target>`**: Safely removes a search path from `app.cfg`.
+- **`bv path available`**: Discovers and catalogs all 30+ pre-bundled Pas2JS packages (`vendor/pas2js/.../packages`) with real-time `[active]` status markers.
+
+| Path Command | Arguments | Action / Output |
+|---|---|---|
+| `bv path` | `[list]` | Lists active compiler search paths in `app.cfg` |
+| `bv path add` | `<dir | pas2js:p>` | Appends `-Fu<path>` with duplicate check & relative paths |
+| `bv path remove` | `<target>` | Deletes matching search path from `app.cfg` |
+| `bv path available`| - | Catalogs 30+ official Pas2JS packages with `[active]` tags |
+
+See detailed documentation in **[53. Compiler Search Paths & Legacy Pascal Migration (bv path)](53-compiler-search-paths-and-legacy-migration.md)**.
 
 ---
 
@@ -386,6 +510,7 @@ Within the interactive cockpit (`[bv: <project>] > `), run commands directly wit
 * `doctor` — Diagnoses development environment (Git, Lazarus, FPC, Pas2JS, Node.js).
 * `self-update` — Synchronizes and recompiles BlaiseVue engine directly from GitHub.
 * `channel [use <name>]` — Inspects or switches framework branches (main / develop).
+* `path [list|add|remove|available]` — Manages compiler search paths (-Fu) and official Pas2JS packages.
 * `exit` / `quit` — Exits the cockpit and returns to regular shell.
 
 > [!TIP]

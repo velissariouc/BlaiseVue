@@ -39,8 +39,8 @@ BlaiseVue 4.0 - 4.4 represents an enterprise generational milestone, delivering 
 - **📋 Reactive Form Validation Engine (`b-validate`)**: Declarative client-side validation rules (`required`, `email`, `min:N`, `max:N`, `numeric`, `pattern`), reactive error tracking (`$errors`), touch states (`$v`), and programmatic validation (`$validate()`).
 - **🎬 FLIP List Transitions (`<transition-group>`)**: High-performance collection animations powered by the First-Last-Invert-Play (FLIP) algorithm, custom wrapper tags (`tag="ul"`), and smooth reordering via `.bv-move`.
 - **🌐 Native Internationalization (`Blaise-i18n`)**: Embedded multi-locale translation engine with `$t(key, params)`, reactive locale switching (`$setLocale(code)`), and fallback resolution.
-- **🎨 Official Themes Package (`packages/blaise-themes`)**: 9 integrated Bootswatch themes (`flatly`, `darkly`, `cosmo`, `cyborg`, `lux`, `pulse`, `solar`, `vapor`, `zephyr`), dynamic stylesheet swapping, dark mode toggle (`data-bs-theme`), and ready-to-use `<bv-theme-toggle>` and `<bv-theme-select>` components.
-- **🔤 Official Icons Package (`packages/blaise-icons`)**: Full integration with 2,000+ Bootstrap Icons via `<bv-icon name="..." size="..." color="...">` with zero runtime bloat.
+- **🎨 Official Themes Package (`packages/core/blaise-themes`)**: 9 integrated Bootswatch themes (`flatly`, `darkly`, `cosmo`, `cyborg`, `lux`, `pulse`, `solar`, `vapor`, `zephyr`), dynamic stylesheet swapping, dark mode toggle (`data-bs-theme`), and ready-to-use `<bv-theme-toggle>` and `<bv-theme-select>` components.
+- **🔤 Official Icons Package (`packages/core/blaise-icons`)**: Full integration with 2,000+ Bootstrap Icons via `<bv-icon name="..." size="..." color="...">` with zero runtime bloat.
 - **⚡ Hot Module Replacement (HMR)**: Instant component recompilation and in-place DOM patching via WebSockets (`:8081`) while preserving active reactive state (`this['State']`).
 - **🛣️ Advanced SPA Routing**: Clean URLs via **HTML5 History API**, recursive **Nested Routes** with `<router-view>`, dynamic route parameters (`:id`), and **Navigation Guards** (`beforeEach`, `beforeEnter`, `afterEach`).
 - **🧩 Scoped Slots & Templates**: Seamless two-way data passing from child components back to parent templates (`#name="slotProps"`, `b-slot`, `slot-scope`).
@@ -49,7 +49,10 @@ BlaiseVue 4.0 - 4.4 represents an enterprise generational milestone, delivering 
 - **📱 Hybrid Mobile Platform (Capacitor & Android .apk)**: Native mobile runtime targeting Android and iOS with native APK generation via `bv mobile build`.
 - **📐 Responsive Grid System (`<bv-container>`, `<bv-row>`, `<bv-col>`)**: Fluid 12-column grid layout with Bootstrap-compatible breakpoints (`cols`, `sm`, `md`, `lg`, `xl`) and gutter controls.
 - **🧭 Mobile Bottom Navigation & Drawer**: Bottom-pinned mobile navigation (`<bv-bottom-nav>`, `<bv-bottom-nav-item>`) and off-canvas drawer (`<bv-drawer>`).
-- **🛠️ VS Code Official Extension (`.vsix`)**: Triple syntax highlighting for `.bv`, directive autocompletion, BlaiseUI IntelliSense, and snippets (`bv vsix`, `bv extension install`).
+- **🛠️ VS Code Official Extension (`.vsix`)**: Triple syntax highlighting for `.bv`, directive autocompletion, BlaiseUI IntelliSense, and snippets (`bv extension install vscode`, `bv extension pack vscode`).
+- **🛡️ Lazarus IDE Official Package (`blaisevue_ide.lpk`)**: Native design-time package for Lazarus IDE with `.bv` multi-syntax highlighting (HTML + Pascal + CSS), File -> New component and view wizards, Tools menu AST diagnostics, and `bv lazarus init` project generation.
+- **🔍 Browser DevTools Extension**: Manifest V3 DevTools extension for Chrome, Edge, and Firefox supporting real-time component inspection, reactive state debugging, and WebSocket HMR monitoring (`bv extension install devtools`).
+- **🌐 Decentralized Package Ecosystem & Registries**: Enterprise package manager with multi-registry catalogs (`bv repo`), SemVer pinning, global offline cache (`~/.blaisevue/packages/`), `<repo>:<package>` disambiguation, and core reserved names protection.
 - **📦 BlaiseUI Official Component Kit**: Over 25 production-ready UI widgets (`bv-btn`, `bv-card`, `bv-input`, `bv-modal`, `bv-datagrid`, `bv-toast`, `bv-accordion`, `bv-container`, `bv-row`, `bv-col`, `bv-drawer`, `bv-bottom-nav`) styled with clean modern CSS.
 
 ---
@@ -64,8 +67,9 @@ BlaiseVue features a modular package architecture located in `/packages`:
 | **`blaise-themes`** | 9 Bootswatch themes + reactive theme management | Flatly, Darkly, Cosmo, Cyborg, Lux, Pulse, Solar, Vapor, Zephyr, `<bv-theme-toggle>`, `<bv-theme-select>`, `$theme` |
 | **`blaise-icons`** | Bootstrap Icons library (fonts + CSS) | `<bv-icon name="heart-fill" size="24px" color="red">`, 2,000+ vector icons |
 | **`blaise-charts`** | Reactive Chart.js data visualization suite | `<bv-chart>`, `<bv-bar-chart>`, `<bv-line-chart>`, `<bv-pie-chart>`, typed Pascal records (`TBVChartData`, `TBVChartOptions`, `TBVChartPalette`) |
-| **`blaise-ui-mobile`** | Mobile-first Ionic components & Pascal wrappers | `<bv-ion-app>`, `<bv-ion-toolbar>`, iOS/Android adaptive themes, `TIonicToast`, `TIonicAlert` |
+| **`blaise-reports`** | Declarative PDF reports and printing engine | PDF report templates, multi-page data tables, headers/footers, print dialogs |
 | **`blaise-studio`** | Developer cockpit & live WebSocket hub | Visual AST inspector, real-time WebSocket monitor, 1-click test/build runner, `TBVStudioClient` |
+| **`blaise-ui-mobile`** | Mobile-first Ionic components & Pascal wrappers | `<bv-ion-app>`, `<bv-ion-toolbar>`, iOS/Android adaptive themes, `TIonicToast`, `TIonicAlert` |
 
 Install packages directly into your project via the CLI:
 ```bash
@@ -98,16 +102,35 @@ bv new c <Name>            # Scaffolds a component (.bv) & test in tests/compone
 bv new v <Name>            # Scaffolds a route view (.bv) & test in tests/views/ (alias: bv g v)
 bv new s <Name>            # Scaffolds a domain service & test in tests/services/ (alias: bv g s)
 bv new t <Name>            # Scaffolds a Pascal test file (smart detection: c, v, services) (alias: bv g t)
-bv remove <c|v|s|t> <Name> # Safely deletes a component, view, service, or test
+bv remove <c|v|s|t|m|d> [Name] # Safely deletes a component, view, service, test, or platform (m/d)
 bv list <c|v|s|t|lib>      # Lists project components, views, services, tests, or installed libs
 bv rename <c|v|s|p>        # Smart rename for services, components, views, or project name
 
+# === Package Repositories & Ecosystem ===
+bv repo list               # Lists registered package repositories (default: official ecosystem)
+bv repo add <name> <url>   # Registers an external ecosystem or repository
+bv repo remove <name>      # Removes a registered repository
+bv repo default <name>     # Sets the default repository
+bv repo sync               # Synchronizes and caches ecosystem package catalog
+bv repo search <term>      # Searches packages across registered ecosystems
+
 # === Package & Theme Management ===
-bv lib install <pkg|url>   # Installs official package (themes, icons, ui) or from URL
-bv lib remove <name>       # Removes an installed component or package from lib/
+bv lib install [<repo>:]<pkg[@ver]> # Installs package in project /lib (e.g. bv lib install test@1.0.0 or official:test)
+bv lib install <pkg> -g    # Installs package in global user cache (~/.blaisevue/packages/)
+bv lib remove <name>       # Removes installed package from lib/
+bv lib update [[<repo>:]name] # Updates library/libraries to latest version
+bv lib outdated [--global] # Checks for available updates in installed packages
+bv lib list [--global]     # Lists installed libraries (project /lib or user global cache)
+bv lib search [[<repo>:]term] # Searches packages in registered repositories
 bv lib pack [dir]          # Assembles & verifies release artifact (.zip with SHA-256)
 bv theme list              # Lists all available installed themes
 bv theme use <name>        # Sets default project theme in index.html (e.g. darkly, lux)
+
+# === Extensions & Developer Tools ===
+bv extension list          # Lists installed and available extensions (VS Code, DevTools, custom)
+bv extension install [ext] # Installs development extension (e.g. vscode, devtools, or custom)
+bv extension remove [ext]  # Uninstalls development extension
+bv extension pack [ext]    # Packages extension into production artifact (.vsix)
 
 # === Project Metadata & Licensing ===
 bv license [list|show|set] # Manages project licenses (MIT, Apache, LGPL, GPL, BSD, Commercial)
@@ -115,8 +138,9 @@ bv meta [show|get|set|bump]# Manages metadata & synchronizes SemVer with src/uAp
 bv reset [--bare] [--force]# Resets demo project to a clean slate (protected against demo-app)
 
 # === Mobile (Android & iOS via Capacitor) ===
-bv mobile init [name] [id] # Scaffolds Capacitor & mobile/ native project
+bv mobile init [name] [id] # Scaffolds Capacitor & mobile/ native project (name & id optional)
 bv mobile sync             # Syncs dist/ with native mobile assets
+bv mobile remove [-y]      # Safely deletes mobile/ and capacitor.config.json (alias: bv remove mobile)
 bv mobile build android    # Builds native Android Debug APK in mobile/bin/android/
 bv mobile build android --release # Builds optimized Release APK (R8/ProGuard)
 bv mobile emulator list    # Lists installed Android Virtual Devices (AVD)
@@ -128,6 +152,7 @@ bv mobile open android     # Opens project in Android Studio
 # === Desktop (Free Pascal, Lazarus IDE & WebUI) ===
 bv desktop init [name]     # Scaffolds Lazarus (.lpi, .lpr) & WebUI project
 bv desktop sync            # Syncs dist/ to desktop/assets/
+bv desktop remove [-y]     # Safely deletes desktop/ native project (alias: bv remove desktop)
 bv desktop build [target]  # Compiles Debug native binary (live console logging)
 bv desktop build [target] --release # Compiles Release native binary (pure GUI - NO console)
 bv desktop run [target]    # Launches desktop app in Debug mode (with console)
@@ -156,6 +181,12 @@ bv self-update --check     # Checks for remote updates without downloading
 bv channel                 # Inspects active channel (* main [stable] or develop [dev])
 bv channel use <name>      # Switches between stable release (main) and development (develop)
 
+# === Compiler Search Paths & Legacy Migration ===
+bv path                         # Lists all active search paths (-Fu) categorized by type
+bv path add <dir|pas2js:pkg>    # Adds directory or built-in Pas2JS package to app.cfg
+bv path remove <target>         # Removes search path from app.cfg
+bv path available               # Catalogs 30+ official Pas2JS packages with active indicator
+
 # === Cockpit & Multi-Project Management ===
 bv update                  # Surgically syncs project infrastructure with latest framework features
 bv update --dry-run        # Previews updates without modifying any files (non-destructive safety)
@@ -175,7 +206,8 @@ bv rename <s|c|v|p> <New>  # Smart rename for services, components, views, or pr
 For the complete architectural evolution specifications, delivered enterprise pillars, and future roadmap milestones (v2.0 to v5.0), see:
 
 - 🗺️ **[Technical Roadmap (doc/Documentation/99-roadmap.md)](doc/Documentation/99-roadmap.md)**: Full architecture breakdown, testing matrices, and future horizons.
-- 📚 **[Documentation Index (doc/Documentation/00-index.md)](doc/Documentation/00-index.md)**: 33+ comprehensive technical manuals covering CLI, reactivity, components, mobile, desktop, and mORMot 2.
+- 📚 **[Documentation Index (doc/Documentation/README.md)](doc/Documentation/README.md)**: 53 comprehensive technical manuals covering CLI, reactivity, components, mobile, desktop, ecosystem, and mORMot 2.
+- 🏛️ **[Core Architecture & Internals (doc/Architecture/README.md)](doc/Architecture/README.md)**: Deep dive into the compiler pipeline, AST evaluation, and reactive proxy engine.
 
 ---
 
@@ -198,19 +230,26 @@ BlaiseVue/
 ├── templates/                 # Scaffolding templates
 │   ├── fullstack-mormot/      # High-performance mORMot 2 server template
 │   └── BVDevTools.pas         # Bridge to browser DevTools extension (v3.0)
-├── packages/                  # Official ecosystem packages
-│   ├── blaise-ui/             # 20+ native UI components & styles
-│   ├── blaise-themes/         # 9 Bootswatch themes & theme switchers
-│   ├── blaise-icons/          # Bootstrap Icons fonts & stylesheet
-│   ├── blaise-charts/         # Reactive Chart.js visualization & Pascal wrappers
-│   └── blaise-ui-mobile/      # Mobile-first Ionic components & Pascal wrappers
+├── packages/                  # Modular package ecosystem & developer tools
+│   ├── core/                  # Official core framework packages
+│   │   ├── blaise-ui/         # 25+ native UI components & styles
+│   │   ├── blaise-themes/     # 9 Bootswatch themes & theme switchers
+│   │   ├── blaise-icons/      # Bootstrap Icons fonts & stylesheet
+│   │   ├── blaise-charts/     # Reactive Chart.js visualization & Pascal wrappers
+│   │   ├── blaise-reports/    # Declarative PDF reports generation engine
+│   │   ├── blaise-studio/     # Developer cockpit & visual AST inspector
+│   │   └── blaise-ui-mobile/  # Mobile-first Ionic components & Pascal wrappers
+│   └── tools/                 # Development extensions & tooling
+│       ├── devtools-extension/# Browser DevTools extension (Chrome, Firefox, Edge)
+│       ├── vscode-extension/  # Official VS Code extension (.vsix packaging & snippets)
+│       └── lazarus/           # Official Lazarus IDE package (.lpk, .bv multi-syntax, wizards)
 ├── vendor/                    # Embedded compiler & backend engines
 │   ├── pas2js/                # Multi-platform pas2js transpiler & RTL
 │   └── mormot2/               # High-throughput Synopse mORMot 2.4 framework
-├── devtools/                  # Manifest V3 Chrome/Edge DevTools extension
 ├── doc/
-│   ├── Documentation/         # 33 comprehensive technical manuals + API Reference
-│   └── Course/                # 10-lesson practical course and architecture deep-dive
+│   ├── Architecture/          # Core compiler pipeline & framework internals
+│   ├── Documentation/         # 53 comprehensive technical manuals + API Reference
+│   └── Course/                # 13-module practical course from beginner to ninja
 └── demo-app/                  # Enterprise showcase application (v3.0)
 ```
 

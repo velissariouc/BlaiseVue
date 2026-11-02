@@ -65,7 +65,10 @@ BlaiseVue delivers a complete, unified Object Pascal ecosystem for modern softwa
 39. [39. Reactive Chart.js Suite (blaise-charts)](39-blaise-charts.md) — High-performance canvas charts (Bar, Line, Pie, Radar, Bubble) with typed datasets.
 41. [41. Package Components Catalog & Manual](41-package-components-catalog.md) — Comprehensive reference manual covering props, events, slots, and copy-pasteable snippets for all 53+ components.
 48. [48. External Library Scaffolding & Release Packager](48-library-distribution-packager.md) — Scaffolding dedicated standalone component libraries with interactive licensing (`bv create --lib`) and automated release distribution (`bv lib pack`) with SHA-256 integrity verification.
-68. [49. Project Metadata, Licensing Suite & Clean Slate Reset](49-project-metadata-licensing-reset.md) — Automated license generation (`bv license`), SemVer & metadata sync (`bv meta`), synchronized Pascal unit (`src/uAppVersion.pas`), and clean slate reset (`bv reset`) with framework safety guards.
+49. [49. Project Metadata, Licensing Suite & Clean Slate Reset](49-project-metadata-licensing-reset.md) — Automated license generation (`bv license`), SemVer & metadata sync (`bv meta`), synchronized Pascal unit (`src/uAppVersion.pas`), and clean slate reset (`bv reset`) with framework safety guards.
+50. [50. Package Ecosystem & Registries](50-package-ecosystem-and-registries.md) — Multi-tier package manager architecture, registry sources (`bv repo`), 4-layer resolution (`lib/`, global cache, core, remote), SemVer versioning (`@version`), updates (`bv lib outdated` / `bv lib update`), and community ecosystem distribution.
+51. [51. BlaiseReports: Native Vector PDF, Excel & Print Engine](51-blaise-reports.md) — Declarative enterprise reporting and multi-format document export engine in pure Object Pascal with `TBVReport` and print optimization.
+52. [52. Global Mixins and Global Plugins in BlaiseVue](52-mixins-and-plugins.md) — Extending framework functionality, global option injection, and cross-cutting plugin architecture.
 
 ### ⚙️ 5. Full-Stack mORMot 2 & Cloud Architecture
 37. [37. Full-Stack Pascal with mORMot 2](37-mormot2-backend.md) — High-throughput REST API, ORM, WebSockets, JWT authentication, and Docker micro-containers.
@@ -92,6 +95,8 @@ BlaiseVue delivers a complete, unified Object Pascal ecosystem for modern softwa
 34. [34. VS Code Extension & Professional DX (.vsix)](34-vscode-extension.md) — Official IDE extension with syntax highlighting, IntelliSense, and snippets.
 40. [40. BlaiseVue Studio Dashboard (bv studio)](40-blaise-studio.md) — Web-based developer cockpit for real-time WebSocket monitoring and workflows.
 44. [44. Native Fast Templates & Compiler AST Verifier](44-native-templates-ast-checker.md) — Zero-with template evaluation, 100% CSP compliance, and compile-time AST typo checking.
+53. [53. Compiler Search Paths & Legacy Pascal Migration (bv path)](53-compiler-search-paths-and-legacy-migration.md) — Linking official Pas2JS built-in packages (chartjs, fcl-base, jspdf) and importing legacy Lazarus/Delphi business logic without rewriting.
+54. [54. Lazarus IDE Integration & Design-Time Package (blaisevue_ide.lpk)](54-lazarus-ide-package.md) — Official Lazarus design-time package with tri-syntax highlighting (`.bv`), File -> New wizards, Tools menu, and `bv lazarus init`.
 
 ### 📖 8. Technical References & Roadmaps
 - [API Technical Reference](api-reference.md) — Complete technical specification of global helpers, classes, and directives.
@@ -133,6 +138,12 @@ bv mormot crud <Model> [f:t...] # Scaffolds ORM model, REST endpoints, and DataG
 bv mormot rpc              # Scaffolds type-safe Pascal RPC client proxies from server interfaces
 bv mormot run              # Starts native mORMot 2 server on port 8090
 bv mormot docker           # Builds production multi-stage micro-container (<20 MB)
+
+# === Compiler Search Paths & Legacy Migration ===
+bv path                    # Lists all active search paths (-Fu) categorized by type
+bv path add <dir|pas2js:p> # Adds directory or built-in Pas2JS package to app.cfg
+bv path remove <target>    # Removes search path from app.cfg
+bv path available          # Catalogs 30+ official Pas2JS packages with active indicator
 
 # === Mobile & Desktop ===
 bv mobile init [name] [id] # Scaffolds Capacitor mobile project
