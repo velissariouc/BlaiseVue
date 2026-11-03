@@ -37,9 +37,10 @@ bv extension install blaise-vscode
 ```
 
 **O que este comando faz nos bastidores:**
-1. Localiza os fontes e bundles da extensão em `packages/tools/vscode-extension/`.
-2. Detecta automaticamente os diretórios de extensões ativos no seu perfil de usuário (`~/.vscode/extensions`, `~/.antigravity-ide/extensions`, `~/.antigravity/extensions`).
-3. Faz o deploy limpo dos grammars de sintaxe, schemas de autocompletion, catálogo de componentes e provedor de formatação.
+1. Localiza o pacote da extensão em `packages/tools/blaise-vscode/` e seu manifesto `tool.json`.
+2. Executa o script multiplataforma de instalação (`install.py`, ou `install.pas` via InstantFPC) com o Python detectado pelo CLI (`bv doctor`).
+3. Detecta automaticamente os diretórios de extensões ativos no seu perfil de usuário (`~/.vscode/extensions`, `~/.antigravity-ide/extensions`, `~/.antigravity/extensions`).
+4. Faz o deploy limpo dos grammars de sintaxe, schemas de autocompletion, catálogo de componentes e provedor de formatação.
 
 > [!IMPORTANT]
 > **Passo Obrigatório de Ativação**: Após executar a instalação, você **DEVE recarregar a janela da IDE** para que o editor carregue a nova versão da extensão:
@@ -58,7 +59,7 @@ Se você preferir instalar diretamente pela interface gráfica do VS Code ou Ant
 3. Selecione a opção **"Install from VSIX..."** (*Instalar a partir do VSIX...*).
 4. No gerenciador de arquivos que se abrir, navegue até a raiz do projeto e selecione o pacote compilado:
    ```text
-   packages/tools/vscode-extension/blaisevue-vscode-4.4.0.vsix
+   packages/tools/blaise-vscode/blaisevue-vscode-4.4.0.vsix
    ```
 5. Clique em **Install**. Uma notificação de sucesso aparecerá no canto inferior direito confirmando a instalação (*Completed installing BlaiseVue extension*).
 6. Pressione **`Ctrl + Shift + P`** $\rightarrow$ **`Developer: Reload Window`** para ativar.
@@ -71,10 +72,10 @@ Se você possui o utilitário de linha de comando `code` (ou `cursor`) configura
 
 ```bash
 # Para Visual Studio Code:
-code --install-extension packages/tools/vscode-extension/blaisevue-vscode-4.4.0.vsix
+code --install-extension packages/tools/blaise-vscode/blaisevue-vscode-4.4.0.vsix
 
 # Para Cursor:
-cursor --install-extension packages/tools/vscode-extension/blaisevue-vscode-4.4.0.vsix
+cursor --install-extension packages/tools/blaise-vscode/blaisevue-vscode-4.4.0.vsix
 ```
 
 Após a conclusão no terminal, recarregue a janela da IDE (**`Ctrl + Shift + P`** $\rightarrow$ **`Developer: Reload Window`**).
@@ -86,7 +87,7 @@ Após a conclusão no terminal, recarregue a janela da IDE (**`Ctrl + Shift + P`
 No Windows, você também pode executar o instalador PowerShell oficial:
 
 ```powershell
-cd packages/tools/vscode-extension
+cd packages/tools/blaise-vscode
 .\install_extension.ps1
 ```
 
@@ -175,10 +176,10 @@ The extension includes code snippets to speed up development:
 
 ## 🛠️ Extension Source Layout
 
-The extension lives in [`packages/tools/vscode-extension/`](/BlaiseVue/packages/tools/vscode-extension/):
+The extension lives in [`packages/tools/blaise-vscode/`](/BlaiseVue/packages/tools/blaise-vscode/):
 
 ```text
-packages/tools/vscode-extension/
+packages/tools/blaise-vscode/
 ├── package.json               # Extension manifest, activation events, and commands
 ├── language-configuration.json # Tag auto-closing rules and comment syntax
 ├── syntaxes/

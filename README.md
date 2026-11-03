@@ -175,7 +175,7 @@ bv mormot rpc              # Scaffolds type-safe Pascal RPC client proxies from 
 bv test                    # Compiles .test.pas files and runs Vitest suite
 
 # === Framework Diagnostics & Git Auto-Updater ===
-bv doctor                  # Diagnoses environment tools (Git, Lazarus & FPC, Pas2JS, Node.js)
+bv doctor                  # Diagnoses environment tools (Git, Lazarus & FPC, InstantFPC, Python 3, Pas2JS, Node.js)
 bv self-update             # Synchronizes & recompiles BlaiseVue engine directly from GitHub via Git
 bv self-update --check     # Checks for remote updates without downloading
 bv channel                 # Inspects active channel (* main [stable] or develop [dev])
@@ -205,6 +205,7 @@ bv rename <s|c|v|p> <New>  # Smart rename for services, components, views, or pr
 
 For the complete architectural evolution specifications, delivered enterprise pillars, and future roadmap milestones (v2.0 to v5.0), see:
 
+- 🎓 **[Complete Course: Zero to Ninja (doc/Course/README.md)](doc/Course/README.md)**: 13 beginner-friendly practical modules with step-by-step guides, runnable `.bv` examples, and real-world analogies.
 - 🗺️ **[Technical Roadmap (doc/Documentation/99-roadmap.md)](doc/Documentation/99-roadmap.md)**: Full architecture breakdown, testing matrices, and future horizons.
 - 📚 **[Documentation Index (doc/Documentation/README.md)](doc/Documentation/README.md)**: 53 comprehensive technical manuals covering CLI, reactivity, components, mobile, desktop, ecosystem, and mORMot 2.
 - 🏛️ **[Core Architecture & Internals (doc/Architecture/README.md)](doc/Architecture/README.md)**: Deep dive into the compiler pipeline, AST evaluation, and reactive proxy engine.
@@ -240,9 +241,9 @@ BlaiseVue/
 │   │   ├── blaise-studio/     # Developer cockpit & visual AST inspector
 │   │   └── blaise-ui-mobile/  # Mobile-first Ionic components & Pascal wrappers
 │   └── tools/                 # Development extensions & tooling
-│       ├── devtools-extension/# Browser DevTools extension (Chrome, Firefox, Edge)
-│       ├── vscode-extension/  # Official VS Code extension (.vsix packaging & snippets)
-│       └── lazarus/           # Official Lazarus IDE package (.lpk, .bv multi-syntax, wizards)
+│       ├── blaise-devtools/   # Browser DevTools extension (Chrome, Firefox, Edge)
+│       ├── blaise-vscode/     # Official VS Code extension (.vsix packaging & snippets)
+│       └── blaise-lazarus/    # Official Lazarus IDE package (.lpk, .bv multi-syntax, wizards)
 ├── vendor/                    # Embedded compiler & backend engines
 │   ├── pas2js/                # Multi-platform pas2js transpiler & RTL
 │   └── mormot2/               # High-throughput Synopse mORMot 2.4 framework
@@ -260,6 +261,7 @@ BlaiseVue/
 ### 📋 Prerequisites
 - **Git (v2.30+)**: Required for cloning the framework, automatic selective updates (`bv self-update`), and channel management (`bv channel`).
 - **Lazarus IDE (or Free Pascal Compiler 3.2+)**: Recommended IDE and compiler for building the native CLI (`bv` / `bv.exe`), desktop applications (`desktop/`), and mORMot 2 servers (`server/`).
+- **Python (v3.8+ Recommended)**: Recommended for executing cross-platform lifecycle scripts (`status.py`, `install.py`, `remove.py`, `pack.py`) for the dynamic developer tooling ecosystem (`bv extension`) and custom user packages (`~/.blaisevue/tools/`).
 - **Node.js (v18+ LTS) & npm**: Powers the development server with HMR (`bv serve` / `bv dev`), automated testing (`bv test`), and mobile synchronization (`bv mobile`).
 - **Android Studio (Recommended for Mobile)**: Required for compiling native Android `.apk` / `.aab` packages (`bv mobile build`), managing emulators, and running `bv mobile open android`. Bundles the Android SDK, Platform-Tools (`adb`), and Java JDK.
 

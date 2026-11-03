@@ -321,7 +321,7 @@ Pre-renders all registered application routes into static, SEO-friendly HTML fil
 Manages built-in framework developer tooling (`packages/tools/`) and user-level custom extensions (`~/.blaisevue/tools/`):
 - `bv extension list`: Inspects available extensions (`blaise-vscode`, `blaise-lazarus`, `blaise-devtools`, and custom tools) and their installation status and versions.
 - `bv extension install <target>`: Installs a specific target extension:
-  - `bv extension install blaise-vscode` (alias: `vscode`): Deploys the official VS Code / Antigravity IDE / Cursor extension (`~/.vscode/extensions/`, `~/.antigravity/extensions/`). After running this command, reload the window via `Ctrl + Shift + P` $\rightarrow$ `Developer: Reload Window` (or restart the IDE). Alternatively, install the pre-packaged `.vsix` manually through the Extensions UI (*Install from VSIX...*) or via terminal (`code --install-extension packages/tools/vscode-extension/blaisevue-vscode-4.4.0.vsix`).
+  - `bv extension install blaise-vscode` (alias: `vscode`): Deploys the official VS Code / Antigravity IDE / Cursor extension (`~/.vscode/extensions/`, `~/.antigravity/extensions/`). After running this command, reload the window via `Ctrl + Shift + P` $\rightarrow$ `Developer: Reload Window` (or restart the IDE). Alternatively, install the pre-packaged `.vsix` manually through the Extensions UI (*Install from VSIX...*) or via terminal (`code --install-extension packages/tools/blaise-vscode/blaisevue-vscode-4.4.0.vsix`).
   - `bv extension install blaise-lazarus` (alias: `lazarus`): Compiles and validates the official Lazarus IDE package (`blaisevue_ide.lpk`) using `lazbuild`.
   - `bv extension install blaise-devtools` (alias: `devtools`): Displays step-by-step instructions for loading the DevTools panel in Mozilla Firefox (`about:debugging`) and Google Chrome (`chrome://extensions`).
   - `bv extension install <tool>`: Executes the custom installer from `~/.blaisevue/tools/<name>/install.ps1` (or `install.sh`).
@@ -563,10 +563,12 @@ bv doctor
 **What it verifies:**
 1. **Git CLI**: Required for framework updates and channel switching.
 2. **Free Pascal (FPC) & Lazarus IDE**: Automatically detects FPC either in the system PATH or bundled within standard Lazarus paths (`C:\lazarus\fpc\...` on Windows, `/usr/bin/fpc` on Linux/macOS).
-3. **Pas2JS (Bundled)**: Verifies the built-in Object Pascal to JavaScript transpiler in `vendor/pas2js/`.
-4. **Synopse mORMot 2 (Bundled)**: Confirms presence of the embedded mORMot 2 full-stack framework in `vendor/mormot2/`.
-5. **Node.js & npm**: Checks for Vitest testing suite and live development HMR support.
-6. **Docker & Optional Tools**: Checks micro-container tools and Android SDK for cross-platform workflows.
+3. **InstantFPC**: Automatically detects InstantFPC in system PATH or inside the Lazarus FPC directory (`instantfpc.exe`), enabling direct Pascal script execution for developer tools.
+4. **Python 3**: Verifies Python in PATH, recommended for dynamic extension lifecycle scripts (`install.py`, `remove.py`, `status.py`, `pack.py`).
+5. **Pas2JS (Bundled)**: Verifies the built-in Object Pascal to JavaScript transpiler in `vendor/pas2js/`.
+6. **Synopse mORMot 2 (Bundled)**: Confirms presence of the embedded mORMot 2 full-stack framework in `vendor/mormot2/`.
+7. **Node.js & npm**: Checks for Vitest testing suite and live development HMR support.
+8. **Docker & Optional Tools**: Checks micro-container tools and Android SDK for cross-platform workflows.
 
 ---
 
