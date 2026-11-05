@@ -254,12 +254,14 @@ bv lib install myrepo:my-widget
 # Install directly into user global cache (~/.blaisevue/packages/):
 bv lib install test --global # (or alias: -g)
 
-# Install official core packages:
-bv lib install ui        # Installs complete BlaiseUI suite into lib/blaise-ui/
-bv lib install themes    # Installs Bootswatch themes into lib/themes/
-bv lib install icons     # Installs Bootstrap Icons fonts & CSS into lib/icons/
-bv lib install charts    # Installs Chart.js suite into lib/blaise-charts/
-bv lib install reports   # Installs BlaiseReports PDF generator into lib/blaise-reports/
+# Install official core packages (supports short aliases, full names, or @blaise-* namespaces):
+bv lib install themes    # (or: blaise-themes, @blaise-themes) -> lib/themes/
+bv lib install ui        # (or: blaise-ui, @blaise-ui)         -> lib/blaise-ui/
+bv lib install icons     # (or: blaise-icons, @blaise-icons)   -> lib/icons/
+bv lib install charts    # (or: blaise-charts, @blaise-charts) -> lib/blaise-charts/
+bv lib install reports   # (or: blaise-reports, @blaise-reports) -> lib/blaise-reports/
+bv lib install mobile    # (or: blaise-ui-mobile, @blaise-ui-mobile) -> lib/blaise-ui-mobile/
+bv lib install studio    # (or: blaise-studio, @blaise-studio) -> lib/blaise-studio/
 
 # Install from arbitrary URL or local .zip archive:
 bv lib install https://example.com/vendor-package.zip
@@ -297,9 +299,13 @@ bv lib remove test
 bv lib remove test --global
 ```
 
-- **Theme Switcher CLI (`bv theme`)**:
-  - `bv theme list`: Lists all installed Bootswatch themes in `lib/themes/`.
-  - `bv theme use <name>`: Updates the active project stylesheet link in `public/index.html` (e.g. `bv theme use darkly`).
+- **Enterprise Theme Manager & Build-Time Optimizer (`bv theme`)**:
+  - `bv theme [list]`: Displays active project themes configured in `package.json`, the current default theme, and all catalog themes provided by `@blaise-themes`.
+  - `bv theme add <name>`: Registers a theme into the `"themes"` array in `package.json`. When building (`bv build`), only configured themes are bundled, reducing CSS payload by ~90% (from ~2.0 MB down to ~220 KB per theme).
+  - `bv theme remove <name>`: Removes a theme from the `"themes"` whitelist in `package.json`.
+  - `bv theme use <name>`: Sets the default active theme in `package.json` (`"theme": "<name>"`) and synchronizes `<link id="bv-theme" rel="stylesheet" href="lib/themes/<name>.min.css">` in `public/index.html`.
+  - `bv theme reset`: Resets theme filtering in `package.json` to compatibility mode, causing `bv build` to bundle all available themes.
+  - *Safety Guard*: Requires `@blaise-themes` (installed via `bv lib install @blaise-themes`). If missing, provides immediate installation guidance.
 - **Auto-Autoload**: Any `.bv` files within `lib/` (or subdirectories) are automatically registered as global components.
 - **Auto-Asset Injection**: Non-theme `.css` and `.js` files found in `lib/` are automatically injected into `dist/index.html`.
 - **Interactive Library Setup (`bv s <name>`)**: Triggers an interactive installation and configuration menu for modular libraries following the **[setup.pas standard](18-external-libraries.md)**.
