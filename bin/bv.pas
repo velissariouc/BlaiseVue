@@ -89,6 +89,12 @@ uses
 function ReadFileToString(const FileName: string): string; forward;
 function GetCliVersion: string; forward;
 function GetCliMajorMinor: string; forward;
+function IsDirectBlaiseVueProjectDir(const ADir: string): Boolean; forward;
+function FindBlaiseVueProjectRoot(const StartDir: string = ''): string; forward;
+function IsValidBlaiseVueProject(const ADir: string = ''): Boolean; forward;
+function RequireBlaiseVueProject(const CmdContext: string = ''): string; forward;
+procedure ClearScreen(const InCockpit: Boolean = False; const ActiveName: string = ''; const ActivePath: string = ''); forward;
+procedure CmdFiles(const TargetArg: string = ''; ShowAll: Boolean = False); forward;
 { Synchronizes SemVer version strings across all official core packages in packages/core/. }
 procedure SyncMonorepoVersions(const TargetVer: string); forward;
 function GetPas2JSPackagesRoot: string; forward;
@@ -652,6 +658,286 @@ begin
   end;
 end;
 
+{ Validates whether a single directory directly contains a valid BlaiseVue project root. }
+function IsDirectBlaiseVueProjectDir(const ADir: string): Boolean;
+var
+  TargetDir, PkgContent: string;
+begin
+  TargetDir := IncludeTrailingPathDelimiter(ExpandFileName(ADir));
+  Result := False;
+  if FileExists(TargetDir + 'app.cfg') then Exit(True);
+  if FileExists(TargetDir + 'src' + DirectorySeparator + 'app.bv') then Exit(True);
+  if DirectoryExists(TargetDir + 'src' + DirectorySeparator + 'views') or
+     DirectoryExists(TargetDir + 'src' + DirectorySeparator + 'components') then Exit(True);
+
+  if FileExists(TargetDir + 'package.json') then
+  begin
+    PkgContent := LowerCase(ReadFileToString(TargetDir + 'package.json'));
+    if Pos('blaise', PkgContent) > 0 then Exit(True);
+  end;
+end;
+
+{ Traverses up parent directories to locate the true BlaiseVue project root (Git/Cargo pattern). }
+function FindBlaiseVueProjectRoot(const StartDir: string = ''): string;
+var
+  Cur, Parent: string;
+begin
+  if StartDir = '' then
+    Cur := ExcludeTrailingPathDelimiter(GetCurrentDir)
+  else
+    Cur := ExcludeTrailingPathDelimiter(ExpandFileName(StartDir));
+
+  while Cur <> '' do
+  begin
+    if IsDirectBlaiseVueProjectDir(Cur) then
+      Exit(Cur);
+    Parent := ExcludeTrailingPathDelimiter(ExtractFileDir(Cur));
+    if (Parent = '') or (Parent = Cur) then
+      Break;
+    Cur := Parent;
+  end;
+  Result := '';
+end;
+
+{ Validates whether a directory (or any of its parents) contains a valid BlaiseVue project structure. }
+function IsValidBlaiseVueProject(const ADir: string = ''): Boolean;
+begin
+  Result := FindBlaiseVueProjectRoot(ADir) <> '';
+end;
+
+{ Enforces that the current context is inside a BlaiseVue project, switching working directory to root. }
+function RequireBlaiseVueProject(const CmdContext: string = ''): string;
+var
+  Root: string;
+  CmdName: string;
+begin
+  Root := FindBlaiseVueProjectRoot('');
+  if Root = '' then
+  begin
+    CmdName := CmdContext;
+    if CmdName = '' then CmdName := 'This command';
+    WriteLn('');
+    WriteLn('========================================================================');
+    WriteLn('  [ERROR] "' + CmdName + '" can only be executed inside a BlaiseVue project.');
+    WriteLn('  Current directory: ', GetCurrentDir);
+    WriteLn('');
+    WriteLn('  To create a new BlaiseVue project:');
+    WriteLn('    bv create <project-name>');
+    WriteLn('');
+    WriteLn('  Or switch to an existing registered project:');
+    WriteLn('    bv use <project-name>');
+    WriteLn('========================================================================');
+    WriteLn('');
+    Halt(1);
+  end;
+  SetCurrentDir(Root);
+  Result := Root;
+end;
+
+{ Clears the console screen buffer in a clean cross-platform manner (Windows, Linux, macOS). }
+procedure ClearScreen(const InCockpit: Boolean = False; const ActiveName: string = ''; const ActivePath: string = '');
+begin
+  {$IFDEF MSWINDOWS}
+  ExecuteProcess('cmd.exe', '/c cls');
+  {$ELSE}
+  Write(#27 + '[2J' + #27 + '[H' + #27 + '[3J');
+  {$ENDIF}
+
+  if InCockpit and (ActiveName <> '') then
+  begin
+    WriteLn('');
+    WriteLn('========================================================================');
+    WriteLn('  [BlaiseVue Interactive Cockpit]');
+    WriteLn('  Active Project: ' + ActiveName + ' (' + ActivePath + ')');
+    WriteLn('  Full-Stack Pascal & Reactive CLI Environment');
+    WriteLn('  Type "help" for command list, or "exit" to quit.');
+    WriteLn('========================================================================');
+    WriteLn('');
+  end;
+end;
+
+{ Recursively renders project files and directories as a structured tree with BlaiseVue annotations. }
+procedure RenderProjectTree(const TargetDir: string; const Prefix: string; var TotalDirs, TotalFiles: Integer; ShowAll: Boolean; Depth: Integer = 1; MaxDepth: Integer = 3);
+var
+  SR: TSearchRec;
+  D: string;
+  DirList, FileList: TStringList;
+  i: Integer;
+  ItemName, LowName, FullItemPath, Ext, Annotation, Branch, SubPrefix: string;
+  IsLast: Boolean;
+begin
+  if not DirectoryExists(TargetDir) then Exit;
+  D := IncludeTrailingPathDelimiter(TargetDir);
+
+  DirList := TStringList.Create;
+  FileList := TStringList.Create;
+  try
+    if FindFirst(D + '*', faAnyFile, SR) = 0 then
+    begin
+      repeat
+        if (SR.Name <> '.') and (SR.Name <> '..') then
+        begin
+          ItemName := SR.Name;
+          LowName := LowerCase(ItemName);
+          if (SR.Attr and faDirectory) <> 0 then
+          begin
+            if not ShowAll then
+            begin
+              if (LowName = 'node_modules') or (LowName = '.git') or (LowName = '.vscode') or
+                 (LowName = '.idea') or (LowName = 'dist') or (LowName = 'generated') or
+                 (LowName = '.blaisevue') or (LowName = '.history') or (LowName = '__pycache__') or
+                 (LowName = 'packages') or (LowName = 'backup') or (LowName = 'units') or
+                 (LowName = 'bin') or (LowName = '.gradle') or (LowName = 'gradle') or
+                 (LowName = 'assets') or (LowName = 'fonts') or
+                 ((LowName = 'android') and (Pos('mobile', LowerCase(D)) > 0)) or
+                 ((LowName = 'ios') and (Pos('mobile', LowerCase(D)) > 0)) then
+                Continue;
+            end;
+            DirList.Add(ItemName);
+          end
+          else
+          begin
+            if not ShowAll then
+            begin
+              Ext := LowerCase(ExtractFileExt(ItemName));
+              if (LowName = '.ds_store') or (LowName = 'thumbs.db') or (LowName = 'package-lock.json') or
+                 (Ext = '.o') or (Ext = '.ppu') or (Ext = '.obj') or (Ext = '.dcu') or
+                 (Ext = '.tmp') or (Ext = '.bak') or (Ext = '.lps') or (Ext = '.exe') then
+                Continue;
+            end;
+            FileList.Add(ItemName);
+          end;
+        end;
+      until FindNext(SR) <> 0;
+      FindClose(SR);
+    end;
+
+    DirList.Sort;
+    FileList.Sort;
+
+    // Render directories first
+    for i := 0 to DirList.Count - 1 do
+    begin
+      ItemName := DirList[i];
+      FullItemPath := D + ItemName;
+      Inc(TotalDirs);
+      IsLast := (i = DirList.Count - 1) and (FileList.Count = 0);
+      if IsLast then
+      begin
+        Branch := '\-- ';
+        SubPrefix := Prefix + '    ';
+      end
+      else
+      begin
+        Branch := '+-- ';
+        SubPrefix := Prefix + '|   ';
+      end;
+
+      Annotation := '';
+      if ItemName = 'src' then Annotation := ' (Frontend Source)'
+      else if ItemName = 'components' then Annotation := ' (UI Components)'
+      else if ItemName = 'views' then Annotation := ' (Route Views)'
+      else if ItemName = 'services' then Annotation := ' (Domain Services)'
+      else if ItemName = 'tests' then Annotation := ' (Test Suites)'
+      else if ItemName = 'server' then Annotation := ' (mORMot 2 Backend)'
+      else if ItemName = 'mobile' then Annotation := ' (Capacitor Mobile)'
+      else if ItemName = 'desktop' then Annotation := ' (Lazarus Desktop)'
+      else if ItemName = 'public' then Annotation := ' (Static Assets)'
+      else if ItemName = 'lib' then Annotation := ' (Installed Libraries)'
+      else if ItemName = 'dist' then Annotation := ' (Compiled Distribution)'
+      else if ItemName = 'generated' then Annotation := ' (Transpiled Output)';
+
+      WriteLn(Prefix + Branch + '[DIR]  ' + ItemName + '/' + Annotation);
+      if (Depth < MaxDepth) or ShowAll then
+        RenderProjectTree(FullItemPath, SubPrefix, TotalDirs, TotalFiles, ShowAll, Depth + 1, MaxDepth);
+    end;
+
+    // Render files
+    for i := 0 to FileList.Count - 1 do
+    begin
+      ItemName := FileList[i];
+      Inc(TotalFiles);
+      IsLast := (i = FileList.Count - 1);
+      if IsLast then
+        Branch := '\-- '
+      else
+        Branch := '+-- ';
+
+      Annotation := '';
+      Ext := LowerCase(ExtractFileExt(ItemName));
+      if Ext = '.bv' then
+      begin
+        if ItemName = 'app.bv' then Annotation := ' (Root SFC App)'
+        else if Pos('components', LowerCase(D)) > 0 then Annotation := ' (Component)'
+        else if Pos('views', LowerCase(D)) > 0 then Annotation := ' (Route View)'
+        else Annotation := ' (SFC Template)';
+      end
+      else if Ext = '.pas' then
+      begin
+        if Pos('.test.pas', LowerCase(ItemName)) > 0 then Annotation := ' (Test Suite)'
+        else if Pos('services', LowerCase(D)) > 0 then Annotation := ' (Domain Service)'
+        else if Pos('models', LowerCase(D)) > 0 then Annotation := ' (ORM Model)'
+        else if ItemName = 'webui.pas' then Annotation := ' (WebUI Bridge)'
+        else Annotation := ' (Pascal Unit)';
+      end
+      else if ItemName = 'app.cfg' then Annotation := ' (Compiler Configuration)'
+      else if ItemName = 'package.json' then Annotation := ' (Project Manifest)'
+      else if ItemName = '.env' then Annotation := ' (Environment Configuration)'
+      else if Ext = '.lpr' then Annotation := ' (Lazarus Program Source)'
+      else if Ext = '.lpi' then Annotation := ' (Lazarus Project Info)'
+      else if ItemName = 'capacitor.config.json' then Annotation := ' (Mobile Configuration)'
+      else if (ItemName = 'Dockerfile') or (ItemName = 'docker-compose.yml') then Annotation := ' (Docker Container)'
+      else if ItemName = 'index.html' then Annotation := ' (HTML Entrypoint)';
+
+      WriteLn(Prefix + Branch + '[FILE] ' + ItemName + Annotation);
+    end;
+  finally
+    DirList.Free;
+    FileList.Free;
+  end;
+end;
+
+{ Displays structured project files tree with BlaiseVue domain categorization. }
+procedure CmdFiles(const TargetArg: string = ''; ShowAll: Boolean = False);
+var
+  ProjectRoot, StartDir, DisplayName: string;
+  TotalDirs, TotalFiles: Integer;
+begin
+  ProjectRoot := RequireBlaiseVueProject('bv files');
+  if (TargetArg <> '') and (TargetArg <> '--all') and (TargetArg <> '-a') then
+  begin
+    if (Length(TargetArg) > 1) and ((TargetArg[1] = '/') or (TargetArg[1] = '\') or (TargetArg[2] = ':')) then
+      StartDir := TargetArg
+    else
+      StartDir := ProjectRoot + DirectorySeparator + TargetArg;
+
+    if not DirectoryExists(StartDir) then
+    begin
+      WriteLn('  [ERROR] Directory not found in project: ' + TargetArg);
+      Exit;
+    end;
+    DisplayName := ExtractFileName(ExcludeTrailingPathDelimiter(StartDir));
+  end
+  else
+  begin
+    StartDir := ProjectRoot;
+    DisplayName := ExtractFileName(ExcludeTrailingPathDelimiter(ProjectRoot));
+  end;
+
+  TotalDirs := 0;
+  TotalFiles := 0;
+  WriteLn('');
+  WriteLn('  Project Files: ' + DisplayName + ' (' + StartDir + ')');
+  WriteLn('  ============================================================');
+  WriteLn('  [DIR]  ' + DisplayName + '/');
+  RenderProjectTree(StartDir, '  ', TotalDirs, TotalFiles, ShowAll);
+  WriteLn('  ============================================================');
+  WriteLn('  Summary: ' + IntToStr(TotalDirs) + ' directories, ' + IntToStr(TotalFiles) + ' files');
+  if not ShowAll then
+    WriteLn('  (Tip: run "files --all" to show build and system directories)');
+  WriteLn('');
+end;
+
 { Computes a fast hash/timestamp fingerprint for file change detection during builds. }
 function GetFileHash(const FileName: string): string;
 
@@ -781,11 +1067,19 @@ procedure CmdUpdate; forward;
 procedure CmdDoctor; forward;
 procedure CmdSelfUpdate(const ChannelOverride: string = ''); forward;
 procedure CmdChannel; forward;
+procedure CmdRollback; forward;
+function FindBestJavaHome(out JavaHome, JavaVer, SourceDesc: string): Boolean; forward;
+function FindAndroidSdkPath: string; forward;
+function FindAndroidADBInfo(out AdbExe, AdbVer, SourceDesc: string): Boolean; forward;
+function FindAndroidEmulatorInfo(out EmuExe, SourceDesc: string; out AvdCount: Integer; out AvdListStr: string): Boolean; forward;
+function EnsureAndroidGradleCompatibility(const AAndroidDir: string): Boolean; forward;
 procedure CmdRemoveMobile(ForceFlag: Boolean); forward;
-{ Removes native desktop platform scaffolding and WebUI bindings (bv remove desktop). }
+{ Removes native desktop platform scaffolding and WebUI bindings (bv desktop remove). }
 procedure CmdRemoveDesktop(ForceFlag: Boolean); forward;
 procedure CmdRepo; forward;
 function CockpitReadLine(out S: string): Boolean; forward;
+function CockpitReadLine(const Prompt: string; out S: string): Boolean; forward;
+function CockpitReadInteractive(const Prompt: string; out S: string): Boolean; forward;
 { Main Parser: Orchestrates the separation of <template>, <script>, and <style> sections }
 procedure ParseBVFile(const FileName: string; out Parsed: TBVParsed);
 var
@@ -2684,7 +2978,7 @@ begin
     '    "type": "library"' + #10 +
     '  },' + #10 +
     '  "scripts": {' + #10 +
-    '    "dev": "bv run dev",' + #10 +
+    '    "dev": "bv dev",' + #10 +
     '    "test": "bv test",' + #10 +
     '    "pack": "bv lib pack"' + #10 +
     '  }' + #10 +
@@ -2990,6 +3284,9 @@ begin
   WriteLn('  bv lib pack       # Assemble production artifact in dist/' + LibName + '-1.0.0.zip');
 end;
 
+procedure SyncLazarusProject(const TargetDir: string; DryRun: Boolean;
+  out LazCreated, LazUpdated: Boolean; out UnitsCount: Integer; out CleanNameOut: string); forward;
+
 { Scaffolds a complete project directory structure with sample pages }
 
 procedure CmdCreate(const ProjectName: string);
@@ -2997,9 +3294,9 @@ procedure CmdCreate(const ProjectName: string);
 var
   Base, TemplatePath: string;
   Content: string;
-  IsFullStack, IsLib: Boolean;
-  TemplateMormotDir, LicenseArg, RealProjectName: string;
-  i: Integer;
+  IsLib, LazCreated, LazUpdated: Boolean;
+  LicenseArg, RealProjectName, LazCleanName: string;
+  i, LazUnitsCount: Integer;
 begin
   IsLib := False;
   LicenseArg := '';
@@ -3063,6 +3360,27 @@ begin
       Content := StringReplace(Content, '<title>BlaiseVue Demo</title>', '<title>' + ProjectName + '</title>', [rfReplaceAll]);
       WriteStringToFile(Base + 'public' + DirectorySeparator + 'index.html', Content);
     end;
+
+    // Customize mobile capacitor.config.json & purge stale demo binaries
+    LazCleanName := '';
+    for i := 1 to Length(ProjectName) do
+      if ProjectName[i] in ['a'..'z', 'A'..'Z', '0'..'9'] then
+        LazCleanName := LazCleanName + LowerCase(ProjectName[i]);
+    if LazCleanName = '' then LazCleanName := 'app';
+    if LazCleanName[1] in ['0'..'9'] then LazCleanName := 'app' + LazCleanName;
+
+    if FileExists(Base + 'capacitor.config.json') then
+    begin
+      Content := ReadFileToString(Base + 'capacitor.config.json');
+      Content := StringReplace(Content, 'com.blaisevue.demoapp', 'com.blaisevue.' + LazCleanName, [rfReplaceAll]);
+      Content := StringReplace(Content, 'BlaiseVue Demo', ProjectName, [rfReplaceAll]);
+      WriteStringToFile(Base + 'capacitor.config.json', Content);
+    end;
+
+    if DirectoryExists(Base + 'mobile' + DirectorySeparator + 'bin') then
+      DeleteDir(Base + 'mobile' + DirectorySeparator + 'bin');
+    if DirectoryExists(Base + 'mobile' + DirectorySeparator + 'android') then
+      DeleteDir(Base + 'mobile' + DirectorySeparator + 'android');
 
     
 
@@ -3275,55 +3593,21 @@ begin
     WriteLn('            Please install Node.js (https://nodejs.org) and run "npm install" inside ' + ProjectName + '.');
   end;
 
-  // Check if --mormot, --fullstack, -m, or -f flag was passed
-
-  IsFullStack := False;
-  for i := 2 to ParamCount do
-  begin
-    if (LowerCase(ParamStr(i)) = '--mormot') or
-
-       (LowerCase(ParamStr(i)) = '-m') or
-
-       (LowerCase(ParamStr(i)) = '--fullstack') or
-
-       (LowerCase(ParamStr(i)) = '-f') or
-
-       (LowerCase(ParamStr(i)) = '--template=fullstack-mormot') or
-
-       (LowerCase(ParamStr(i)) = '--template=mormot') or
-
-       ((LowerCase(ParamStr(i)) = '--template') and (i + 1 <= ParamCount) and
-
-        ((LowerCase(ParamStr(i + 1)) = 'fullstack-mormot') or (LowerCase(ParamStr(i + 1)) = 'mormot'))) then
-    begin
-      IsFullStack := True;
-      Break;
-    end;
-  end;
-
-  if IsFullStack then
-  begin
-    TemplateMormotDir := GetSDKPath + 'templates' + DirectorySeparator + 'fullstack-mormot';
-    if DirectoryExists(TemplateMormotDir) then
-    begin
-      WriteLn('Scaffolding Full-Stack mORMot 2 backend server in ', ProjectName, '/server...');
-      ForceDir(Base + 'server');
-      CopyDir(TemplateMormotDir, Base + 'server', ['bin', 'lib']);
-      ForceDir(Base + 'server' + DirectorySeparator + 'bin');
-      ForceDir(Base + 'server' + DirectorySeparator + 'lib');
-      WriteLn('  [+] Full-Stack mORMot 2 backend scaffolded successfully.');
-    end;
-  end;
+  // Generate project-named Lazarus IDE files (.lpi / .lpr) and clean up template leftovers
+  SyncLazarusProject(ExcludeTrailingPathDelimiter(Base), False, LazCreated, LazUpdated, LazUnitsCount, LazCleanName);
+  WriteLn('  [+] Generated Lazarus IDE project: ', LazCleanName, '.lpi (', LazUnitsCount, ' units indexed).');
 
   WriteLn('');
   WriteLn('Project created successfully!');
   WriteLn('');
   WriteLn('Next steps:');
   WriteLn('  cd ', ProjectName);
-  WriteLn('  bv dev');
-  if IsFullStack then
+  WriteLn('  bv doctor       # Verify environment & project health');
+  WriteLn('  bv enter        # (Optional) Enter interactive project Cockpit');
+  WriteLn('  bv dev          # Start local dev server at http://localhost:8080');
+  if DirectoryExists(Base + 'server') then
   begin
-    WriteLn('  bv mormot run          # Starts the native mORMot 2 backend on port 8090');
+    WriteLn('  bv mormot run [--release] # Starts the native mORMot 2 backend on port 8090');
   end;
 end;
 
@@ -3786,6 +4070,7 @@ var
   Parsed: TBVParsed;
   i, TotalWarnings, FileWarnings: Integer;
 begin
+  RequireBlaiseVueProject('bv check');
   WriteLn('=== BlaiseVue Template AST Checker & Type-Verification ===');
   WriteLn('');
   BVFiles := TStringList.Create;
@@ -4276,7 +4561,7 @@ procedure CmdClean;
 var
   Base: string;
 begin
-  Base := GetCurrentDir + DirectorySeparator;
+  Base := RequireBlaiseVueProject('bv clean') + DirectorySeparator;
   WriteLn('=== BlaiseVue Clean ===');
   WriteLn('Cleaning generated files...');
   if DirectoryExists(Base + 'generated') then
@@ -4324,6 +4609,7 @@ var
   IsApp: Boolean;
   JSFiles: TStringList;
 begin
+  RequireBlaiseVueProject('bv build');
   GenPath := GetCurrentDir + DirectorySeparator + 'generated' + DirectorySeparator;
   DistPath := GetCurrentDir + DirectorySeparator + 'dist' + DirectorySeparator;
   PublicPath := GetCurrentDir + DirectorySeparator + 'public' + DirectorySeparator;
@@ -4600,6 +4886,7 @@ var
   CompPath, TargetPath, Content: string;
   TestPath, TestFile, TestContent, CompTag: string;
 begin
+  RequireBlaiseVueProject('bv g c');
   CompPath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'components' + DirectorySeparator;
   TargetPath := CompPath + CompName + '.bv';
   if FileExists(TargetPath) then
@@ -4684,6 +4971,7 @@ procedure CmdRemoveComponent(const CompName: string);
 var
   BVPath, PasPath, TestPath, GenPath: string;
 begin
+  RequireBlaiseVueProject('bv remove c');
   BVPath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'components' + DirectorySeparator + CompName + '.bv';
   PasPath := GetCurrentDir + DirectorySeparator + 'generated' + DirectorySeparator + 'u' + CompName + '.pas';
   TestPath := GetCurrentDir + DirectorySeparator + 'tests' + DirectorySeparator + 'components' + DirectorySeparator + CompName + '.test.pas';
@@ -4728,6 +5016,7 @@ var
   TestPath, TestFile, TestContent: string;
   ViewTag, ViewKebab: string;
 begin
+  RequireBlaiseVueProject('bv g v');
   ViewPath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'views' + DirectorySeparator;
   TargetPath := ViewPath + ViewName + '.bv';
   if FileExists(TargetPath) then
@@ -6402,6 +6691,7 @@ var
   i, FoundIdx: Integer;
   HasConfig: Boolean;
 begin
+  RequireBlaiseVueProject('bv theme');
   CleanCmd := LowerCase(Trim(SubCmd));
   CleanTheme := LowerCase(Trim(ThemeArg));
 
@@ -6677,6 +6967,7 @@ procedure CmdRemoveView(const ViewName: string);
 var
   BVPath, PasPath, TestPath, GenPath: string;
 begin
+  RequireBlaiseVueProject('bv remove v');
   BVPath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'views' + DirectorySeparator + ViewName + '.bv';
   PasPath := GetCurrentDir + DirectorySeparator + 'generated' + DirectorySeparator + 'u' + ViewName + '.pas';
   TestPath := GetCurrentDir + DirectorySeparator + 'tests' + DirectorySeparator + 'views' + DirectorySeparator + ViewName + '.test.pas';
@@ -6711,6 +7002,7 @@ var
   NormName, ServicePath, TargetPath, Content: string;
   TestPath, TestFile, TestContent: string;
 begin
+  RequireBlaiseVueProject('bv g s');
   NormName := ServiceName;
   if (Length(NormName) > 1) and ((NormName[1] = 'u') or (NormName[1] = 'U')) and (NormName[2] in ['A'..'Z']) then
     NormName := Copy(NormName, 2, Length(NormName) - 1);
@@ -6812,6 +7104,7 @@ procedure CmdRemoveService(const ServiceName: string);
 var
   NormName, TargetPath, TestPath: string;
 begin
+  RequireBlaiseVueProject('bv remove s');
   NormName := ServiceName;
   if (Length(NormName) > 1) and ((NormName[1] = 'u') or (NormName[1] = 'U')) and (NormName[2] in ['A'..'Z']) then
     NormName := Copy(NormName, 2, Length(NormName) - 1);
@@ -6856,6 +7149,7 @@ begin
 
   // Check if user passed an explicit directory, e.g. "framework/MyTest", "unit/MyTest", "services/MyTest"
 
+  RequireBlaiseVueProject('bv g t');
   IsExplicitPath := (Pos(DirectorySeparator, CleanName) > 0);
   if IsExplicitPath then
   begin
@@ -7154,6 +7448,7 @@ var
   AllTests: TStringList;
   i: Integer;
 begin
+  RequireBlaiseVueProject('bv remove t');
   CleanName := ExtractFileName(StringReplace(TestName, '/', DirectorySeparator, [rfReplaceAll]));
   CleanName := StringReplace(CleanName, '.test.pas', '', [rfIgnoreCase]);
   CleanName := StringReplace(CleanName, '.test', '', [rfIgnoreCase]);
@@ -7198,18 +7493,18 @@ begin
   BinMobileDir := GetCurrentDir + DirectorySeparator + 'bin' + DirectorySeparator + 'mobile';
   if not DirectoryExists(MobileDir) and not FileExists(CapConfigFile) and not DirectoryExists(BinMobileDir) then
   begin
-    WriteLn('Plataforma Mobile nao encontrada no projeto atual (pasta mobile/ nao existe).');
+    WriteLn('Mobile platform not found in current project (mobile/ directory does not exist).');
     Exit;
   end;
 
   if not ForceFlag then
   begin
-    Write('Tem certeza que deseja remover a plataforma Mobile (pasta mobile/ e capacitor.config.json)? [s/N]: ');
+    Write('Are you sure you want to remove the Mobile platform (mobile/ directory and capacitor.config.json)? [y/N]: ');
     ReadLn(Ans);
     Ans := LowerCase(Trim(Ans));
     if (Ans <> 's') and (Ans <> 'y') and (Ans <> 'sim') and (Ans <> 'yes') then
     begin
-      WriteLn('Operacao cancelada.');
+      WriteLn('Operation cancelled.');
       Exit;
     end;
   end;
@@ -7217,34 +7512,34 @@ begin
   DeletedAny := False;
   if DirectoryExists(MobileDir) then
   begin
-    WriteLn('  [-] Excluindo pasta mobile/ ...');
+    WriteLn('  [-] Deleting mobile/ directory ...');
     DeleteDir(MobileDir);
     DeletedAny := True;
   end;
 
   if FileExists(CapConfigFile) then
   begin
-    WriteLn('  [-] Excluindo capacitor.config.json ...');
+    WriteLn('  [-] Deleting capacitor.config.json ...');
     DeleteFile(CapConfigFile);
     DeletedAny := True;
   end;
 
   if DirectoryExists(BinMobileDir) then
   begin
-    WriteLn('  [-] Excluindo binarios em bin/mobile/ ...');
+    WriteLn('  [-] Deleting binaries in bin/mobile/ ...');
     DeleteDir(BinMobileDir);
     DeletedAny := True;
   end;
 
   if DeletedAny then
   begin
-    WriteLn('  [SUCCESS] Plataforma Mobile removida com sucesso!');
-    WriteLn('  [INFO] Para reativa-la no futuro, basta executar:');
+    WriteLn('  [SUCCESS] Mobile platform removed successfully!');
+    WriteLn('  [INFO] To re-enable it in the future, simply run:');
     WriteLn('         bv mobile init');
   end;
 end;
 
-{ Removes native desktop platform scaffolding and WebUI bindings (bv remove desktop). }
+{ Removes native desktop platform scaffolding and WebUI bindings (bv desktop remove). }
 procedure CmdRemoveDesktop(ForceFlag: Boolean);
 var
   DesktopDir, BinDesktopDir: string;
@@ -7255,18 +7550,18 @@ begin
   BinDesktopDir := GetCurrentDir + DirectorySeparator + 'bin' + DirectorySeparator + 'desktop';
   if not DirectoryExists(DesktopDir) and not DirectoryExists(BinDesktopDir) then
   begin
-    WriteLn('Plataforma Desktop nao encontrada no projeto atual (pasta desktop/ nao existe).');
+    WriteLn('Desktop platform not found in current project (desktop/ directory does not exist).');
     Exit;
   end;
 
   if not ForceFlag then
   begin
-    Write('Tem certeza que deseja remover a plataforma Desktop (pasta desktop/)? [s/N]: ');
+    Write('Are you sure you want to remove the Desktop platform (desktop/ directory)? [y/N]: ');
     ReadLn(Ans);
     Ans := LowerCase(Trim(Ans));
     if (Ans <> 's') and (Ans <> 'y') and (Ans <> 'sim') and (Ans <> 'yes') then
     begin
-      WriteLn('Operacao cancelada.');
+      WriteLn('Operation cancelled.');
       Exit;
     end;
   end;
@@ -7274,22 +7569,22 @@ begin
   DeletedAny := False;
   if DirectoryExists(DesktopDir) then
   begin
-    WriteLn('  [-] Excluindo pasta desktop/ ...');
+    WriteLn('  [-] Deleting desktop/ directory ...');
     DeleteDir(DesktopDir);
     DeletedAny := True;
   end;
 
   if DirectoryExists(BinDesktopDir) then
   begin
-    WriteLn('  [-] Excluindo binarios em bin/desktop/ ...');
+    WriteLn('  [-] Deleting binaries in bin/desktop/ ...');
     DeleteDir(BinDesktopDir);
     DeletedAny := True;
   end;
 
   if DeletedAny then
   begin
-    WriteLn('  [SUCCESS] Plataforma Desktop removida com sucesso!');
-    WriteLn('  [INFO] Para reativa-la no futuro, basta executar:');
+    WriteLn('  [SUCCESS] Desktop platform removed successfully!');
+    WriteLn('  [INFO] To re-enable it in the future, simply run:');
     WriteLn('         bv desktop init');
   end;
 end;
@@ -8636,6 +8931,7 @@ procedure CmdPath;
 var
   SubCmd, TargetArg: string;
 begin
+  RequireBlaiseVueProject('bv path');
   SubCmd := '';
   TargetArg := '';
   if ParamCount >= 2 then SubCmd := LowerCase(ParamStr(2));
@@ -8690,6 +8986,7 @@ begin
             (LName = 'dist') or
             (LName = 'units') or
             (LName = '.bv_backup') or
+            (LName = '.bv-backup') or
             (LName = 'backup') or
             (LName = 'lib_cache') or
             (LName = 'tmp') or
@@ -8760,6 +9057,247 @@ begin
     finally
       FindClose(SR);
     end;
+  end;
+end;
+
+{ Synchronizes root Lazarus IDE project files (<CleanName>.lpr and <CleanName>.lpi)
+  for any BlaiseVue project directory and removes leftover demo_app.* template files. }
+procedure SyncLazarusProject(const TargetDir: string; DryRun: Boolean;
+  out LazCreated, LazUpdated: Boolean; out UnitsCount: Integer; out CleanNameOut: string);
+var
+  CurDir, ProjName, CleanName, LprFile, LpiFile, OldLpiContent: string;
+  LprContent, LpiContent, RelFile: string;
+  UnitsList: TStringList;
+  i: Integer;
+begin
+  CurDir := ExcludeTrailingPathDelimiter(TargetDir);
+  ProjName := ExtractFileName(CurDir);
+  CleanName := StringReplace(ProjName, '-', '_', [rfReplaceAll]);
+  CleanName := StringReplace(CleanName, ' ', '_', [rfReplaceAll]);
+  if CleanName = '' then CleanName := 'BlaiseVueApp';
+  CleanNameOut := CleanName;
+
+  LprFile := CurDir + DirectorySeparator + CleanName + '.lpr';
+  LpiFile := CurDir + DirectorySeparator + CleanName + '.lpi';
+  LazCreated := (not FileExists(LprFile)) or (not FileExists(LpiFile));
+  LazUpdated := False;
+
+  // Clean up leftover template files (demo_app.lpi / demo_app.lpr / demo_app.lps) if project is not demo_app
+  if LowerCase(CleanName) <> 'demo_app' then
+  begin
+    if FileExists(CurDir + DirectorySeparator + 'demo_app.lpi') then
+    begin
+      if not DryRun then DeleteFile(CurDir + DirectorySeparator + 'demo_app.lpi');
+      LazUpdated := True;
+    end;
+    if FileExists(CurDir + DirectorySeparator + 'demo_app.lpr') then
+    begin
+      if not DryRun then DeleteFile(CurDir + DirectorySeparator + 'demo_app.lpr');
+      LazUpdated := True;
+    end;
+    if FileExists(CurDir + DirectorySeparator + 'demo_app.lps') then
+    begin
+      if not DryRun then DeleteFile(CurDir + DirectorySeparator + 'demo_app.lps');
+      LazUpdated := True;
+    end;
+  end;
+
+  // 1. Create <CleanName>.lpr if missing
+  if not FileExists(LprFile) then
+  begin
+    LprContent :=
+      'program ' + CleanName + ';' + #10 +
+      #10 +
+      '{$mode objfpc}{$H+}' + #10 +
+      #10 +
+      'uses' + #10 +
+      '  {$IFDEF UNIX}' + #10 +
+      '  cthreads,' + #10 +
+      '  {$ENDIF}' + #10 +
+      '  Classes, SysUtils;' + #10 +
+      #10 +
+      '// BlaiseVue Reactive Single File Components (.bv)' + #10 +
+      '// Press F9 in Lazarus IDE to launch the live dev server!' + #10 +
+      'begin' + #10 +
+      '  WriteLn(''BlaiseVue Project: ' + CleanName + ''');' + #10 +
+      'end.' + #10;
+    if not DryRun then
+      WriteStringToFile(LprFile, LprContent);
+  end;
+
+  // 2. Collect all project files across the whole project (*.bv, *.pas, configs)
+  UnitsList := TStringList.Create;
+  try
+    CollectProjectUnits(CurDir, '', UnitsList, True);
+    UnitsList.Sort;
+    UnitsCount := UnitsList.Count;
+
+    // 3. Assemble <CleanName>.lpi
+    LpiContent :=
+      '<?xml version="1.0" encoding="UTF-8"?>' + #10 +
+      '<CONFIG>' + #10 +
+      '  <ProjectOptions>' + #10 +
+      '    <Version Value="12"/>' + #10 +
+      '    <General>' + #10 +
+      '      <Flags>' + #10 +
+      '        <MainUnitHasCreateFormStatements Value="False"/>' + #10 +
+      '        <MainUnitHasTitleStatement Value="False"/>' + #10 +
+      '        <Scaled Value="True"/>' + #10 +
+      '      </Flags>' + #10 +
+      '      <SessionStorage Value="InProjectDir"/>' + #10 +
+      '      <Title Value="' + CleanName + '"/>' + #10 +
+      '      <ResourceType Value="res"/>' + #10 +
+      '      <UseXPManifest Value="True"/>' + #10 +
+      '    </General>' + #10 +
+      '    <BuildModes Count="1">' + #10 +
+      '      <Item1 Name="Default" Default="True"/>' + #10 +
+      '    </BuildModes>' + #10 +
+      '    <PublishOptions>' + #10 +
+      '      <Version Value="2"/>' + #10 +
+      '      <UseFileFilters Value="True"/>' + #10 +
+      '    </PublishOptions>' + #10 +
+      '    <RunParams>' + #10 +
+      '      <FormatVersion Value="2"/>' + #10 +
+      '      <Modes ActiveMode="default">' + #10 +
+      '        <Mode Name="default">' + #10 +
+      '          <local>' + #10 +
+      '            <HostApplicationFilename Value="bv.exe"/>' + #10 +
+      '            <CommandLineParams Value="dev"/>' + #10 +
+      '          </local>' + #10 +
+      '        </Mode>' + #10 +
+      '      </Modes>' + #10 +
+      '    </RunParams>' + #10 +
+      '    <Units Count="' + IntToStr(UnitsList.Count + 1) + '">' + #10 +
+      '      <Unit0>' + #10 +
+      '        <Filename Value="' + CleanName + '.lpr"/>' + #10 +
+      '        <IsPartOfProject Value="True"/>' + #10 +
+      '      </Unit0>' + #10;
+
+    for i := 0 to UnitsList.Count - 1 do
+    begin
+      RelFile := UnitsList[i];
+      LpiContent := LpiContent +
+        '      <Unit' + IntToStr(i + 1) + '>' + #10 +
+        '        <Filename Value="' + RelFile + '"/>' + #10 +
+        '        <IsPartOfProject Value="True"/>' + #10 +
+        '      </Unit' + IntToStr(i + 1) + '>' + #10;
+    end;
+
+    LpiContent := LpiContent +
+      '    </Units>' + #10 +
+      '  </ProjectOptions>' + #10 +
+      '  <CompilerOptions>' + #10 +
+      '    <Version Value="11"/>' + #10 +
+      '    <Target>' + #10 +
+      '      <Filename Value="bin/' + CleanName + '"/>' + #10 +
+      '    </Target>' + #10 +
+      '    <SearchPaths>' + #10 +
+      '      <IncludeFiles Value="$(ProjOutDir)"/>' + #10 +
+      '      <OtherUnitFiles Value="src;src/services;src/components;src/views;server;tests;desktop;generated;lib"/>' + #10 +
+      '      <UnitOutputDirectory Value="generated/units"/>' + #10 +
+      '    </SearchPaths>' + #10 +
+      '    <Other>' + #10 +
+      '      <CustomOptions Value="-dBLAISEVUE"/>' + #10 +
+      '      <ExecuteBefore>' + #10 +
+      '        <Command Value="bv build"/>' + #10 +
+      '        <CompileReasons Compile="True" Build="True" Run="False"/>' + #10 +
+      '      </ExecuteBefore>' + #10 +
+      '    </Other>' + #10 +
+      '  </CompilerOptions>' + #10 +
+      '</CONFIG>' + #10;
+
+    if FileExists(LpiFile) then
+    begin
+      OldLpiContent := StringReplace(ReadFileToString(LpiFile), #13#10, #10, [rfReplaceAll]);
+      if OldLpiContent <> LpiContent then
+      begin
+        LazUpdated := True;
+        if not DryRun then
+          WriteStringToFile(LpiFile, LpiContent);
+      end;
+    end
+    else
+    begin
+      if not DryRun then
+        WriteStringToFile(LpiFile, LpiContent);
+    end;
+  finally
+    UnitsList.Free;
+  end;
+end;
+
+{ Synchronizes server/server.lpi for Full-Stack mORMot 2 backend projects. }
+procedure SyncServerLazarusProject(const ServerDir: string; DryRun: Boolean;
+  out ServerLpiCreated, ServerLpiUpdated: Boolean; out ServerUnitsCount: Integer);
+var
+  CleanServerDir, ServerLpiFile, TplServerLpi, LpiContent, OldContent, UnitsXml, RelFile: string;
+  UnitsList: TStringList;
+  StartPos, EndPos, i: Integer;
+begin
+  ServerLpiCreated := False;
+  ServerLpiUpdated := False;
+  ServerUnitsCount := 0;
+  CleanServerDir := ExcludeTrailingPathDelimiter(ServerDir);
+  ServerLpiFile := CleanServerDir + DirectorySeparator + 'server.lpi';
+  TplServerLpi := GetSDKPath + 'templates' + DirectorySeparator + 'fullstack-mormot' + DirectorySeparator + 'server.lpi';
+
+  if not FileExists(ServerLpiFile) then
+  begin
+    if not FileExists(TplServerLpi) then Exit;
+    ServerLpiCreated := True;
+    LpiContent := ReadFileToString(TplServerLpi);
+  end
+  else
+    LpiContent := ReadFileToString(ServerLpiFile);
+
+  OldContent := StringReplace(LpiContent, #13#10, #10, [rfReplaceAll]);
+  LpiContent := OldContent;
+
+  UnitsList := TStringList.Create;
+  try
+    CollectProjectUnits(CleanServerDir, '', UnitsList, False);
+    // Remove server.lpr if present (already Unit0)
+    for i := UnitsList.Count - 1 downto 0 do
+      if LowerCase(UnitsList[i]) = 'server.lpr' then
+        UnitsList.Delete(i);
+    UnitsList.Sort;
+    ServerUnitsCount := UnitsList.Count + 1;
+
+    UnitsXml :=
+      '    <Units Count="' + IntToStr(UnitsList.Count + 1) + '">' + #10 +
+      '      <Unit0>' + #10 +
+      '        <Filename Value="server.lpr"/>' + #10 +
+      '        <IsPartOfProject Value="True"/>' + #10 +
+      '      </Unit0>' + #10;
+
+    for i := 0 to UnitsList.Count - 1 do
+    begin
+      RelFile := UnitsList[i];
+      UnitsXml := UnitsXml +
+        '      <Unit' + IntToStr(i + 1) + '>' + #10 +
+        '        <Filename Value="' + RelFile + '"/>' + #10 +
+        '        <IsPartOfProject Value="True"/>' + #10 +
+        '      </Unit' + IntToStr(i + 1) + '>' + #10;
+    end;
+    UnitsXml := UnitsXml + '    </Units>';
+
+    StartPos := Pos('    <Units Count="', LpiContent);
+    if StartPos = 0 then StartPos := Pos('<Units Count="', LpiContent);
+    EndPos := Pos('</Units>', LpiContent);
+    if (StartPos > 0) and (EndPos > StartPos) then
+    begin
+      LpiContent := Copy(LpiContent, 1, StartPos - 1) + UnitsXml + Copy(LpiContent, EndPos + Length('</Units>'), MaxInt);
+    end;
+
+    if ServerLpiCreated or (LpiContent <> OldContent) then
+    begin
+      if not ServerLpiCreated then
+        ServerLpiUpdated := True;
+      if not DryRun then
+        WriteStringToFile(ServerLpiFile, LpiContent);
+    end;
+  finally
+    UnitsList.Free;
   end;
 end;
 
@@ -9183,6 +9721,42 @@ begin
 
   // 6. SYNC src/uAppVersion.pas
   SyncAppVersionUnit(ProjName, AppVer, AppAuth, AppLic);
+
+  // 7. SYNC mobile configuration and purge stale binaries
+  if FileExists(BaseDir + 'capacitor.config.json') or DirectoryExists(BaseDir + 'mobile') then
+  begin
+    Answer := '';
+    for i := 1 to Length(ProjName) do
+      if ProjName[i] in ['a'..'z', 'A'..'Z', '0'..'9'] then
+        Answer := Answer + LowerCase(ProjName[i]);
+    if Answer = '' then Answer := 'app';
+    if Answer[1] in ['0'..'9'] then Answer := 'app' + Answer;
+
+    if FileExists(BaseDir + 'capacitor.config.json') then
+    begin
+      HomeBvContent := ReadFileToString(BaseDir + 'capacitor.config.json');
+      HomeBvContent := StringReplace(HomeBvContent, 'com.blaisevue.demoapp', 'com.blaisevue.' + Answer, [rfReplaceAll]);
+      HomeBvContent := StringReplace(HomeBvContent, 'BlaiseVue Demo', ProjName, [rfReplaceAll]);
+      WriteStringToFile(BaseDir + 'capacitor.config.json', HomeBvContent);
+      WriteLn('  [+] Synchronized mobile configuration: capacitor.config.json');
+    end;
+
+    if DirectoryExists(BaseDir + 'mobile' + DirectorySeparator + 'bin') then
+      DeleteDir(BaseDir + 'mobile' + DirectorySeparator + 'bin');
+
+    if DirectoryExists(BaseDir + 'mobile' + DirectorySeparator + 'android') then
+    begin
+      if FileExists(BaseDir + 'mobile' + DirectorySeparator + 'android' + DirectorySeparator + 'app' + DirectorySeparator + 'build.gradle') then
+      begin
+        HomeBvContent := ReadFileToString(BaseDir + 'mobile' + DirectorySeparator + 'android' + DirectorySeparator + 'app' + DirectorySeparator + 'build.gradle');
+        if Pos('com.blaisevue.demoapp', HomeBvContent) > 0 then
+        begin
+          DeleteDir(BaseDir + 'mobile' + DirectorySeparator + 'android');
+          WriteLn('  [+] Reset mobile native android platform to match project identity: ' + ProjName);
+        end;
+      end;
+    end;
+  end;
   WriteLn('');
   WriteLn('============================================================');
   WriteLn('  BlaiseVue Project Reset Complete!');
@@ -9194,7 +9768,7 @@ begin
   WriteLn('');
   WriteLn('Next steps:');
   WriteLn('  bv test        Run test suite');
-  WriteLn('  bv run dev     Start development server');
+  WriteLn('  bv dev         Start development server');
   WriteLn('============================================================');
   WriteLn('');
 end;
@@ -9347,6 +9921,13 @@ end;
 { Runs the local development HTTP server with WebSocket HMR bridge (bv serve). }
 procedure CmdServe;
 begin
+  if not FileExists('dist' + DirectorySeparator + 'index.html') or
+     not FileExists('dist' + DirectorySeparator + 'js' + DirectorySeparator + 'main.js') then
+  begin
+    WriteLn('  [INFO] dist/ bundle not found. Running initial development build...');
+    CmdBuild;
+  end;
+
   WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Dev Server (HMR Enabled) ===');
   if not HasCommand('node') then
   begin
@@ -9431,7 +10012,7 @@ begin
   WriteLn('=== BlaiseVue Production Preview ===');
   if not DirectoryExists('dist') then
   begin
-    WriteLn('ERROR: /dist folder not found. Run "bv run build" first.');
+    WriteLn('ERROR: /dist folder not found. Run "bv build --release" first.');
     Exit;
   end;
 
@@ -10130,10 +10711,15 @@ end;
 function ExecCmdCapture(const CmdLine: string; out OutText: string): Boolean;
 var
   OutStr: string;
+  EffectiveCmd: string;
 begin
   OutStr := '';
   {$IFDEF WINDOWS}
-  Result := RunCommand('cmd.exe', ['/c', CmdLine], OutStr);
+  if Pos('"', CmdLine) > 0 then
+    EffectiveCmd := '"' + CmdLine + '"'
+  else
+    EffectiveCmd := CmdLine;
+  Result := RunCommand('cmd.exe', ['/c', EffectiveCmd], OutStr);
   {$ELSE}
   Result := RunCommand('sh', ['-c', CmdLine], OutStr);
   {$ENDIF}
@@ -10384,6 +10970,368 @@ begin
     Exit;
   end;
   {$ENDIF}
+end;
+
+{ ------------------------------------------------------------------- }
+{ Mobile Environment & Tooling Discovery (Java JDK, Android SDK, ADB) }
+{ ------------------------------------------------------------------- }
+
+function ParseJavaVersionMajor(const OutputStr: string; out FullVer: string): Integer;
+var
+  P1, P2: Integer;
+  VerStr, MajorStr: string;
+begin
+  Result := 0;
+  FullVer := '';
+  VerStr := '';
+  P1 := Pos('"', OutputStr);
+  if P1 > 0 then
+  begin
+    P2 := PosEx('"', OutputStr, P1 + 1);
+    if P2 > P1 then
+      VerStr := Copy(OutputStr, P1 + 1, P2 - P1 - 1);
+  end;
+  if VerStr = '' then
+  begin
+    P1 := Pos('version ', LowerCase(OutputStr));
+    if P1 > 0 then
+    begin
+      VerStr := Trim(Copy(OutputStr, P1 + 8, 20));
+      if Pos(' ', VerStr) > 0 then
+        VerStr := Copy(VerStr, 1, Pos(' ', VerStr) - 1);
+    end
+    else
+      VerStr := Trim(OutputStr);
+  end;
+  FullVer := VerStr;
+  if Copy(VerStr, 1, 2) = '1.' then
+    VerStr := Copy(VerStr, 3, MaxInt);
+  P1 := Pos('.', VerStr);
+  if P1 > 0 then
+    MajorStr := Copy(VerStr, 1, P1 - 1)
+  else
+  begin
+    P1 := Pos('-', VerStr);
+    if P1 > 0 then
+      MajorStr := Copy(VerStr, 1, P1 - 1)
+    else
+      MajorStr := VerStr;
+  end;
+  Result := StrToIntDef(MajorStr, 0);
+end;
+
+function ProbeJavaCandidate(const CandidateDir: string; out OutVer: string; out MajorVer: Integer): Boolean;
+var
+  ExePath, OutText: string;
+begin
+  Result := False;
+  OutVer := '';
+  MajorVer := 0;
+  if (CandidateDir = '') or not DirectoryExists(CandidateDir) then Exit;
+
+  ExePath := ExcludeTrailingPathDelimiter(CandidateDir) + DirectorySeparator + 'bin' + DirectorySeparator + 'java' + {$IFDEF WINDOWS}'.exe'{$ELSE}''{$ENDIF};
+  if not FileExists(ExePath) then Exit;
+
+  if ExecCmdCapture('"' + ExePath + '" -version 2>&1', OutText) and (OutText <> '') then
+  begin
+    MajorVer := ParseJavaVersionMajor(OutText, OutVer);
+    if MajorVer > 0 then
+      Result := True;
+  end;
+end;
+
+procedure CheckSingleJdkDir(const CandDir, LabelDesc: string; var BestHome, BestVer, BestDesc: string; var BestMajor: Integer; var FallbackHome, FallbackVer, FallbackDesc: string; var FallbackMajor: Integer);
+var
+  OutVer: string;
+  Major: Integer;
+begin
+  if (CandDir = '') or not DirectoryExists(CandDir) then Exit;
+  if ProbeJavaCandidate(CandDir, OutVer, Major) then
+  begin
+    if (Major >= 17) and (Major <= 21) then
+    begin
+      if (BestMajor = 0) or (Major = 17) then
+      begin
+        BestHome := ExcludeTrailingPathDelimiter(CandDir);
+        BestVer := OutVer;
+        BestDesc := LabelDesc;
+        BestMajor := Major;
+      end;
+    end
+    else if FallbackMajor = 0 then
+    begin
+      FallbackHome := ExcludeTrailingPathDelimiter(CandDir);
+      FallbackVer := OutVer;
+      FallbackDesc := LabelDesc;
+      FallbackMajor := Major;
+    end;
+  end;
+end;
+
+procedure ScanJdkDirectory(const BaseDir: string; var BestHome, BestVer, BestDesc: string; var BestMajor: Integer; var FallbackHome, FallbackVer, FallbackDesc: string; var FallbackMajor: Integer);
+var
+  SR: TSearchRec;
+  CandDir, OutVer: string;
+  Major: Integer;
+begin
+  if not DirectoryExists(BaseDir) then Exit;
+  if FindFirst(IncludeTrailingPathDelimiter(BaseDir) + '*', faDirectory, SR) = 0 then
+  begin
+    try
+      repeat
+        if (SR.Name <> '.') and (SR.Name <> '..') and ((SR.Attr and faDirectory) <> 0) then
+        begin
+          CandDir := IncludeTrailingPathDelimiter(BaseDir) + SR.Name;
+          if ProbeJavaCandidate(CandDir, OutVer, Major) then
+          begin
+            if (Major >= 17) and (Major <= 21) then
+            begin
+              if (BestMajor = 0) or (Major = 17) then
+              begin
+                BestHome := CandDir;
+                BestVer := OutVer;
+                BestDesc := SR.Name;
+                BestMajor := Major;
+              end;
+            end
+            else if FallbackMajor = 0 then
+            begin
+              FallbackHome := CandDir;
+              FallbackVer := OutVer;
+              FallbackDesc := SR.Name;
+              FallbackMajor := Major;
+            end;
+          end;
+        end;
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+  end;
+end;
+
+function FindBestJavaHome(out JavaHome, JavaVer, SourceDesc: string): Boolean;
+var
+  BestHome, BestVer, BestDesc: string;
+  FallbackHome, FallbackVer, FallbackDesc: string;
+  BestMajor, FallbackMajor: Integer;
+  EnvJava, WhereOut, FirstLine, CandDir: string;
+begin
+  JavaHome := '';
+  JavaVer := '';
+  SourceDesc := '';
+  BestHome := '';
+  BestVer := '';
+  BestDesc := '';
+  FallbackHome := '';
+  FallbackVer := '';
+  FallbackDesc := '';
+  BestMajor := 0;
+  FallbackMajor := 0;
+  Result := False;
+
+  // 1. Check JAVA_HOME environment variable
+  EnvJava := GetEnvironmentVariable('JAVA_HOME');
+  if EnvJava <> '' then
+    CheckSingleJdkDir(EnvJava, 'JAVA_HOME (' + EnvJava + ')', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+
+  // 2. Check Java in system PATH
+  {$IFDEF WINDOWS}
+  if ExecCmdCapture('where.exe java 2>nul', WhereOut) and (WhereOut <> '') then
+  begin
+    FirstLine := Trim(Copy(WhereOut, 1, Pos(#10, WhereOut + #10) - 1));
+    FirstLine := Trim(StringReplace(FirstLine, #13, '', [rfReplaceAll]));
+    if FileExists(FirstLine) then
+    begin
+      CandDir := ExtractFileDir(ExtractFileDir(FirstLine));
+      CheckSingleJdkDir(CandDir, 'system PATH (' + CandDir + ')', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+    end;
+  end;
+  {$ELSE}
+  if ExecCmdCapture('which java 2>/dev/null', WhereOut) and (WhereOut <> '') then
+  begin
+    FirstLine := Trim(Copy(WhereOut, 1, Pos(#10, WhereOut + #10) - 1));
+    if FileExists(FirstLine) then
+    begin
+      CandDir := ExtractFileDir(ExtractFileDir(FirstLine));
+      CheckSingleJdkDir(CandDir, 'system PATH (' + CandDir + ')', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+    end;
+  end;
+  {$ENDIF}
+
+  // 3. Scan common vendor JDK directories on Windows
+  {$IFDEF WINDOWS}
+  ScanJdkDirectory('C:\Program Files\Eclipse Adoptium', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+  ScanJdkDirectory('C:\Program Files\Java', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+  ScanJdkDirectory('C:\Program Files\Microsoft', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+  ScanJdkDirectory('C:\Program Files\Zulu', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+  ScanJdkDirectory('C:\Program Files\BellSoft\LibericaJDK', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+
+  // 4. Check Android Studio bundled JBR (Windows)
+  CheckSingleJdkDir('C:\Program Files\Android\Android Studio\jbr', 'Android Studio JBR', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+  EnvJava := GetEnvironmentVariable('LOCALAPPDATA');
+  if EnvJava <> '' then
+    CheckSingleJdkDir(EnvJava + '\Programs\Android Studio\jbr', 'Android Studio JBR (Local)', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+  {$ELSE}
+    {$IFDEF DARWIN}
+    CheckSingleJdkDir('/Applications/Android Studio.app/Contents/jbr/Contents/Home', 'Android Studio JBR (macOS)', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+    ScanJdkDirectory('/Library/Java/JavaVirtualMachines', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+    {$ELSE}
+    ScanJdkDirectory('/usr/lib/jvm', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+    CheckSingleJdkDir('/opt/android-studio/jbr', 'Android Studio JBR (/opt)', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+    EnvJava := GetEnvironmentVariable('HOME');
+    if EnvJava <> '' then
+      CheckSingleJdkDir(EnvJava + '/.local/share/JetBrains/Toolbox/apps/android-studio/jbr', 'Android Studio JBR (Toolbox)', BestHome, BestVer, BestDesc, BestMajor, FallbackHome, FallbackVer, FallbackDesc, FallbackMajor);
+    {$ENDIF}
+  {$ENDIF}
+
+  if BestMajor > 0 then
+  begin
+    JavaHome := BestHome;
+    JavaVer := BestVer;
+    SourceDesc := BestDesc;
+    Result := True;
+  end
+  else if FallbackMajor > 0 then
+  begin
+    JavaHome := FallbackHome;
+    JavaVer := FallbackVer;
+    SourceDesc := FallbackDesc;
+    Result := True;
+  end;
+end;
+
+function FindAndroidSdkPath: string;
+var
+  EnvHome, LocalApp: string;
+begin
+  Result := '';
+  EnvHome := GetEnvironmentVariable('ANDROID_HOME');
+  if (EnvHome <> '') and DirectoryExists(EnvHome) then Exit(ExcludeTrailingPathDelimiter(EnvHome));
+
+  EnvHome := GetEnvironmentVariable('ANDROID_SDK_ROOT');
+  if (EnvHome <> '') and DirectoryExists(EnvHome) then Exit(ExcludeTrailingPathDelimiter(EnvHome));
+
+  {$IFDEF WINDOWS}
+  LocalApp := GetEnvironmentVariable('LOCALAPPDATA');
+  if (LocalApp <> '') and DirectoryExists(LocalApp + '\Android\Sdk') then
+    Exit(LocalApp + '\Android\Sdk');
+  {$ELSE}
+  LocalApp := GetEnvironmentVariable('HOME');
+  if LocalApp <> '' then
+  begin
+    if DirectoryExists(LocalApp + '/Android/Sdk') then
+      Exit(LocalApp + '/Android/Sdk');
+    if DirectoryExists(LocalApp + '/Library/Android/sdk') then
+      Exit(LocalApp + '/Library/Android/sdk');
+  end;
+  {$ENDIF}
+end;
+
+function FindAndroidADBInfo(out AdbExe, AdbVer, SourceDesc: string): Boolean;
+var
+  SdkPath, OutText, FirstLine: string;
+begin
+  AdbExe := '';
+  AdbVer := '';
+  SourceDesc := '';
+  Result := False;
+
+  SdkPath := FindAndroidSdkPath;
+  if (SdkPath <> '') and FileExists(SdkPath + DirectorySeparator + 'platform-tools' + DirectorySeparator + 'adb' + {$IFDEF WINDOWS}'.exe'{$ELSE}''{$ENDIF}) then
+  begin
+    AdbExe := SdkPath + DirectorySeparator + 'platform-tools' + DirectorySeparator + 'adb' + {$IFDEF WINDOWS}'.exe'{$ELSE}''{$ENDIF};
+    SourceDesc := SdkPath + DirectorySeparator + 'platform-tools';
+  end
+  else
+  begin
+    {$IFDEF WINDOWS}
+    if ExecCmdCapture('where.exe adb 2>nul', OutText) and (OutText <> '') then
+    begin
+      FirstLine := Trim(Copy(OutText, 1, Pos(#10, OutText + #10) - 1));
+      FirstLine := Trim(StringReplace(FirstLine, #13, '', [rfReplaceAll]));
+      if FileExists(FirstLine) then
+      begin
+        AdbExe := FirstLine;
+        SourceDesc := 'system PATH';
+      end;
+    end;
+    {$ELSE}
+    if ExecCmdCapture('which adb 2>/dev/null', OutText) and (OutText <> '') then
+    begin
+      FirstLine := Trim(Copy(OutText, 1, Pos(#10, OutText + #10) - 1));
+      if FileExists(FirstLine) then
+      begin
+        AdbExe := FirstLine;
+        SourceDesc := 'system PATH';
+      end;
+    end;
+    {$ENDIF}
+  end;
+
+  if (AdbExe <> '') and FileExists(AdbExe) then
+  begin
+    if ExecCmdCapture('"' + AdbExe + '" version', OutText) then
+    begin
+      if Pos('version ', LowerCase(OutText)) > 0 then
+      begin
+        AdbVer := Copy(OutText, Pos('version ', LowerCase(OutText)) + 8, Length(OutText));
+        if Pos(#10, AdbVer) > 0 then
+          AdbVer := Copy(AdbVer, 1, Pos(#10, AdbVer) - 1);
+        AdbVer := Trim(StringReplace(AdbVer, #13, '', [rfReplaceAll]));
+      end
+      else
+        AdbVer := 'detected';
+    end;
+    Result := True;
+  end;
+end;
+
+function FindAndroidEmulatorInfo(out EmuExe, SourceDesc: string; out AvdCount: Integer; out AvdListStr: string): Boolean;
+var
+  SdkPath, OutText, Line: string;
+  Lines: TStringList;
+  i: Integer;
+begin
+  EmuExe := '';
+  SourceDesc := '';
+  AvdCount := 0;
+  AvdListStr := '';
+  Result := False;
+
+  SdkPath := FindAndroidSdkPath;
+  if (SdkPath <> '') and FileExists(SdkPath + DirectorySeparator + 'emulator' + DirectorySeparator + 'emulator' + {$IFDEF WINDOWS}'.exe'{$ELSE}''{$ENDIF}) then
+  begin
+    EmuExe := SdkPath + DirectorySeparator + 'emulator' + DirectorySeparator + 'emulator' + {$IFDEF WINDOWS}'.exe'{$ELSE}''{$ENDIF};
+    SourceDesc := SdkPath + DirectorySeparator + 'emulator';
+    Result := True;
+  end;
+
+  if Result and FileExists(EmuExe) then
+  begin
+    OutText := '';
+    if ExecCmdCapture('"' + EmuExe + '" -list-avds', OutText) and (OutText <> '') then
+    begin
+      Lines := TStringList.Create;
+      try
+        Lines.Text := OutText;
+        for i := 0 to Lines.Count - 1 do
+        begin
+          Line := Trim(Lines[i]);
+          if (Line <> '') and (Pos('INFO', Line) <> 1) and (Pos('WARNING', Line) <> 1) and (Pos('ERROR', Line) <> 1) then
+          begin
+            Inc(AvdCount);
+            if AvdListStr = '' then
+              AvdListStr := Line
+            else if AvdCount <= 3 then
+              AvdListStr := AvdListStr + ', ' + Line;
+          end;
+        end;
+      finally
+        Lines.Free;
+      end;
+    end;
+  end;
 end;
 
 type
@@ -10766,6 +11714,169 @@ begin
   end;
 end;
 
+{ Ensures Android Gradle compatibility with Java 17 LTS and configures signingConfig for local release testing. }
+function EnsureAndroidGradleCompatibility(const AAndroidDir: string): Boolean;
+var
+  BuildGradlePath, AppBuildGradlePath, CapBuildGradlePath, KeystoreExamplePath, GitIgnorePath: string;
+  LocalPropsPath, SdkPath, EscapedSdkPath: string;
+  Content: string;
+  Updated: Boolean;
+begin
+  Result := False;
+  if (AAndroidDir = '') or not DirectoryExists(AAndroidDir) then Exit;
+
+    // 0. Auto-generate local.properties with sdk.dir
+  LocalPropsPath := AAndroidDir + DirectorySeparator + 'local.properties';
+  if not FileExists(LocalPropsPath) then
+  begin
+    SdkPath := FindAndroidSdkPath;
+    if SdkPath <> '' then
+    begin
+      EscapedSdkPath := StringReplace(SdkPath, '\', '\\', [rfReplaceAll]);
+      EscapedSdkPath := StringReplace(EscapedSdkPath, ':', '\:', [rfReplaceAll]);
+      WriteStringToFile(LocalPropsPath, 'sdk.dir=' + EscapedSdkPath + #13#10);
+      Result := True;
+    end;
+  end;
+
+  // 1. Root build.gradle
+  BuildGradlePath := AAndroidDir + DirectorySeparator + 'build.gradle';
+  if FileExists(BuildGradlePath) then
+  begin
+    Content := ReadFileToString(BuildGradlePath);
+    Updated := False;
+    if Pos('VERSION_21', Content) > 0 then
+    begin
+      Content := StringReplace(Content, 'VERSION_21', 'VERSION_17', [rfReplaceAll]);
+      Updated := True;
+    end;
+    if Pos('subprojects', Content) = 0 then
+    begin
+      Content := Content + #13#10 +
+        'subprojects {' + #13#10 +
+        '    afterEvaluate { project ->' + #13#10 +
+        '        if (project.hasProperty("android")) {' + #13#10 +
+        '            android {' + #13#10 +
+        '                compileOptions {' + #13#10 +
+        '                    sourceCompatibility JavaVersion.VERSION_17' + #13#10 +
+        '                    targetCompatibility JavaVersion.VERSION_17' + #13#10 +
+        '                }' + #13#10 +
+        '            }' + #13#10 +
+        '        }' + #13#10 +
+        '        if (project.plugins.hasPlugin("org.jetbrains.kotlin.android") || project.plugins.hasPlugin("kotlin-android")) {' + #13#10 +
+        '            kotlin {' + #13#10 +
+        '                jvmToolchain(17)' + #13#10 +
+        '            }' + #13#10 +
+        '        }' + #13#10 +
+        '    }' + #13#10 +
+        '}' + #13#10;
+      Updated := True;
+    end;
+    if Updated then
+    begin
+      WriteStringToFile(BuildGradlePath, Content);
+      Result := True;
+    end;
+  end;
+
+  // 2. app/build.gradle
+  AppBuildGradlePath := AAndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build.gradle';
+  if FileExists(AppBuildGradlePath) then
+  begin
+    Content := ReadFileToString(AppBuildGradlePath);
+    Updated := False;
+    if Pos('VERSION_21', Content) > 0 then
+    begin
+      Content := StringReplace(Content, 'VERSION_21', 'VERSION_17', [rfReplaceAll]);
+      Updated := True;
+    end;
+
+    // Ensure signingConfigs with keystore.properties fallback
+    if (Pos('signingConfigs', Content) = 0) or (Pos('keystore.properties', Content) = 0) then
+    begin
+      if Pos('signingConfig signingConfigs.debug', Content) > 0 then
+      begin
+        Content := StringReplace(Content, 'signingConfig signingConfigs.debug',
+          'if (rootProject.file(''keystore.properties'').exists()) {' + #13#10 +
+          '                signingConfig signingConfigs.release' + #13#10 +
+          '            } else {' + #13#10 +
+          '                signingConfig signingConfigs.debug' + #13#10 +
+          '            }', []);
+        Updated := True;
+      end;
+
+      if (Pos('signingConfigs {', Content) = 0) and (Pos('buildTypes {', Content) > 0) then
+      begin
+        Content := StringReplace(Content, 'buildTypes {',
+          'signingConfigs {' + #13#10 +
+          '        release {' + #13#10 +
+          '            if (rootProject.file(''keystore.properties'').exists()) {' + #13#10 +
+          '                def keystoreProperties = new Properties()' + #13#10 +
+          '                keystoreProperties.load(new FileInputStream(rootProject.file(''keystore.properties'')))' + #13#10 +
+          '                storeFile file(keystoreProperties[''storeFile''])' + #13#10 +
+          '                storePassword keystoreProperties[''storePassword'']' + #13#10 +
+          '                keyAlias keystoreProperties[''keyAlias'']' + #13#10 +
+          '                keyPassword keystoreProperties[''keyPassword'']' + #13#10 +
+          '            }' + #13#10 +
+          '        }' + #13#10 +
+          '    }' + #13#10 +
+          '    buildTypes {', []);
+        Updated := True;
+      end;
+    end;
+
+    if Updated then
+    begin
+      WriteStringToFile(AppBuildGradlePath, Content);
+      Result := True;
+    end;
+  end;
+
+  // 3. app/capacitor.build.gradle
+  CapBuildGradlePath := AAndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'capacitor.build.gradle';
+  if FileExists(CapBuildGradlePath) then
+  begin
+    Content := ReadFileToString(CapBuildGradlePath);
+    if Pos('VERSION_21', Content) > 0 then
+    begin
+      Content := StringReplace(Content, 'VERSION_21', 'VERSION_17', [rfReplaceAll]);
+      WriteStringToFile(CapBuildGradlePath, Content);
+      Result := True;
+    end;
+  end;
+
+  // 4. Ensure keystore.properties.example template exists
+  KeystoreExamplePath := AAndroidDir + DirectorySeparator + 'keystore.properties.example';
+  if not FileExists(KeystoreExamplePath) then
+  begin
+    WriteStringToFile(KeystoreExamplePath,
+      '# BlaiseVue Production Android Keystore Configuration' + #13#10 +
+      '# Copy this file to keystore.properties and fill in your production credentials.' + #13#10 +
+      '# NEVER commit keystore.properties or your private .jks / .keystore to Git!' + #13#10 +
+      '#' + #13#10 +
+      '# storeFile=my-release-key.jks' + #13#10 +
+      '# storePassword=YourStorePassword' + #13#10 +
+      '# keyAlias=my-key-alias' + #13#10 +
+      '# keyPassword=YourKeyPassword' + #13#10);
+  end;
+
+  // 5. Ensure .gitignore protects keystore secrets
+  GitIgnorePath := AAndroidDir + DirectorySeparator + '.gitignore';
+  if FileExists(GitIgnorePath) then
+  begin
+    Content := ReadFileToString(GitIgnorePath);
+    if Pos('keystore.properties', Content) = 0 then
+    begin
+      Content := Content + #13#10 +
+        '# Keystore & Production Secrets' + #13#10 +
+        'keystore.properties' + #13#10 +
+        '*.jks' + #13#10 +
+        '*.keystore' + #13#10;
+      WriteStringToFile(GitIgnorePath, Content);
+    end;
+  end;
+end;
+
 { Mobile application compiler and device orchestrator targeting Android and iOS (bv mobile). }
 procedure CmdMobile(const SubCmd: string; const Arg1: string = ''; const Arg2: string = '');
 
@@ -10774,71 +11885,32 @@ var
   CapConfigFile, MobileCapConfigFile: string;
   ActualAppName, ActualAppId, ConfigContent, ReadmeFile, ReadmeContent: string;
   ExistingConfig, CleanName, TargetPlatform, SelectedAVD, EmulatorAction: string;
-  IsRelease, IsAllTargets, UseEmulator: Boolean;
+  RequestedCapVersion, CapTag, CapVerDisplay: string;
+  PkgJsonFile, PkgContent, CurrentCapVer, LatestCapVer, ExtraPkgs: string;
+  IsRelease, IsAllTargets, UseEmulator, IsBundle, IsCheckOnly, IsFreshEmulator, IsNoBuild, IsForceInit, NeedsAndroidRecreate: Boolean;
+  GradleText: string;
   AvdList: TStringList;
   i: Integer;
 { Locates the Android SDK emulator executable on the host system. }
   function FindAndroidEmulator: string;
   var
-    AndroidHome, LocalAppData, P: string;
+    EmuExe, EmuSrc, DummyList: string;
+    DummyCount: Integer;
   begin
-    Result := '';
-    {$IFDEF WINDOWS}
-
-    AndroidHome := GetEnvironmentVariable('ANDROID_HOME');
-    if (AndroidHome <> '') and FileExists(AndroidHome + '\emulator\emulator.exe') then
-      Exit(AndroidHome + '\emulator\emulator.exe');
-
-    LocalAppData := GetEnvironmentVariable('LOCALAPPDATA');
-    if (LocalAppData <> '') and FileExists(LocalAppData + '\Android\Sdk\emulator\emulator.exe') then
-      Exit(LocalAppData + '\Android\Sdk\emulator\emulator.exe');
-
-    P := GetEnvironmentVariable('ProgramFiles');
-    if (P <> '') and FileExists(P + '\Android\Android Studio\jbr\bin\emulator.exe') then
-      Exit(P + '\Android\Android Studio\jbr\bin\emulator.exe');
-
-    Result := 'emulator.exe';
-    {$ELSE}
-
-    AndroidHome := GetEnvironmentVariable('ANDROID_HOME');
-    if (AndroidHome <> '') and FileExists(AndroidHome + '/emulator/emulator') then
-      Exit(AndroidHome + '/emulator/emulator');
-
-    LocalAppData := GetEnvironmentVariable('HOME');
-    if (LocalAppData <> '') and FileExists(LocalAppData + '/Android/Sdk/emulator/emulator') then
-      Exit(LocalAppData + '/Android/Sdk/emulator/emulator');
-
-    Result := 'emulator';
-    {$ENDIF}
+    if FindAndroidEmulatorInfo(EmuExe, EmuSrc, DummyCount, DummyList) and (EmuExe <> '') then
+      Result := EmuExe
+    else
+      Result := 'emulator' + {$IFDEF WINDOWS}'.exe'{$ELSE}''{$ENDIF};
   end;
 
   function FindAndroidADB: string;
   var
-    AndroidHome, LocalAppData: string;
+    AdbExe, AdbVer, AdbSrc: string;
   begin
-    Result := 'adb';
-    {$IFDEF WINDOWS}
-
-    AndroidHome := GetEnvironmentVariable('ANDROID_HOME');
-    if (AndroidHome <> '') and FileExists(AndroidHome + '\platform-tools\adb.exe') then
-      Exit(AndroidHome + '\platform-tools\adb.exe');
-
-    LocalAppData := GetEnvironmentVariable('LOCALAPPDATA');
-    if (LocalAppData <> '') and FileExists(LocalAppData + '\Android\Sdk\platform-tools\adb.exe') then
-      Exit(LocalAppData + '\Android\Sdk\platform-tools\adb.exe');
-
-    Result := 'adb.exe';
-    {$ELSE}
-
-    AndroidHome := GetEnvironmentVariable('ANDROID_HOME');
-    if (AndroidHome <> '') and FileExists(AndroidHome + '/platform-tools/adb') then
-      Exit(AndroidHome + '/platform-tools/adb');
-
-    LocalAppData := GetEnvironmentVariable('HOME');
-    if (LocalAppData <> '') and FileExists(LocalAppData + '/Android/Sdk/platform-tools/adb') then
-      Exit(LocalAppData + '/Android/Sdk/platform-tools/adb');
-
-    {$ENDIF}
+    if FindAndroidADBInfo(AdbExe, AdbVer, AdbSrc) and (AdbExe <> '') then
+      Result := AdbExe
+    else
+      Result := 'adb' + {$IFDEF WINDOWS}'.exe'{$ELSE}''{$ENDIF};
   end;
 
   function GetInstalledAVDs: TStringList;
@@ -10911,7 +11983,7 @@ var
     WriteLn('  [+] Starting Android Emulator: ' + TargetAVD + ' ...');
     {$IFDEF WINDOWS}
 
-    ExecuteProcess('cmd', '/c set "PATH=' + ExtractFileDir(FindAndroidADB) + ';%PATH%" && start "" "' + EmulatorExe + '" -avd ' + TargetAVD);
+    ExecuteProcess('cmd', '/c set "PATH=' + ExtractFileDir(FindAndroidADB) + ';%PATH%" && start "" "' + EmulatorExe + '" -avd ' + TargetAVD + ' -no-snapshot-load');
 
     {$ELSE}
 
@@ -10919,6 +11991,22 @@ var
     {$ENDIF}
 
     Result := True;
+  end;
+
+  procedure KillAndroidEmulator;
+  var
+    AdbExe, OutText: string;
+  begin
+    WriteLn('  [+] Stopping Android Emulator instances...');
+    AdbExe := FindAndroidADB;
+    ExecCmdCapture('"' + AdbExe + '" -e emu kill 2>&1', OutText);
+    Sleep(500);
+    {$IFDEF WINDOWS}
+    ExecCmdCapture('taskkill /F /IM qemu-system-x86_64.exe /IM emulator.exe /T 2>&1', OutText);
+    {$ELSE}
+    ExecCmdCapture('pkill -9 -f "qemu-system|emulator" 2>&1', OutText);
+    {$ENDIF}
+    WriteLn('  [v] Android Emulator processes stopped.');
   end;
 
   { Parses an individual command line option flag or positional parameter. }
@@ -10930,6 +12018,11 @@ var
     if S = '' then Exit;
     if (S = '--release') or (S = '-r') or (S = 'release') then
       IsRelease := True
+    else if (S = '--bundle') or (S = '--aab') or (S = 'bundle') or (S = 'aab') then
+    begin
+      IsBundle := True;
+      IsRelease := True;
+    end
     else if (S = '--debug') or (S = '-d') or (S = 'debug') then
       IsRelease := False
     else if (S = 'android') or (S = '--android') or (S = '--target=android') then
@@ -10940,6 +12033,12 @@ var
       IsAllTargets := True
     else if (S = '--emulator') or (S = '-e') or (S = 'emulator') then
       UseEmulator := True
+    else if S = '--fresh' then
+      IsFreshEmulator := True
+    else if (S = '--no-build') then
+      IsNoBuild := True
+    else if (S = '-f') or (S = '--force') then
+      IsForceInit := True
     else if (SubCmd = 'emulator') and (EmulatorAction = '') then
       EmulatorAction := S
     else if (UseEmulator or (SubCmd = 'emulator')) and (SelectedAVD = '') and (Copy(S, 1, 1) <> '-') then
@@ -10947,7 +12046,14 @@ var
     else if (ActualAppName = '') and (SubCmd = 'init') and (Copy(S, 1, 1) <> '-') then
       ActualAppName := A
     else if (ActualAppId = '') and (SubCmd = 'init') and (Copy(S, 1, 1) <> '-') then
-      ActualAppId := A;
+      ActualAppId := A
+    else if (SubCmd = 'upgrade') or (SubCmd = 'migrate') then
+    begin
+      if (S = '--check') or (S = '-c') or (S = 'check') then
+        IsCheckOnly := True
+      else if (RequestedCapVersion = '') and (Copy(S, 1, 1) <> '-') then
+        RequestedCapVersion := A;
+    end;
   end;
 
   { Fast regex/substring extractor for JSON properties without full parser overhead. }
@@ -10968,9 +12074,10 @@ var
   end;
 
 { Compiles native binary artifacts for a specified platform target. }
-  function BuildSingleTarget(const ATarget: string; ARelease: Boolean): Boolean;
+  function BuildSingleTarget(const ATarget: string; ARelease: Boolean; ABundle: Boolean = False): Boolean;
   var
-    TBinDir, SourceApk, TargetApk, AltApk: string;
+    TBinDir, SourceApk, TargetApk, AltApk, SourceAab, TargetAab: string;
+    BestJavaHome, BestJavaVer, BestJavaSource, JavaPrefix, SdkPath: string;
   begin
     Result := False;
     TBinDir := BinDir + DirectorySeparator + ATarget;
@@ -10984,30 +12091,66 @@ var
         Exit(False);
       end;
 
-      if ARelease then
-        WriteLn('  [+] Compiling Android APK in RELEASE mode (Gradle assembleRelease)...')
+      EnsureAndroidGradleCompatibility(AndroidDir);
 
+      if ABundle then
+        WriteLn('  [+] Compiling Android App Bundle (AAB) for Google Play (Gradle bundleRelease)...')
+      else if ARelease then
+        WriteLn('  [+] Compiling Android APK in RELEASE mode (Gradle assembleRelease)...')
       else
         WriteLn('  [+] Compiling Android APK in DEBUG mode (Gradle assembleDebug)...');
 
+      JavaPrefix := '';
+      SdkPath := FindAndroidSdkPath;
+      if SdkPath <> '' then
+      begin
+        {$IFDEF WINDOWS}
+        JavaPrefix := 'set "ANDROID_HOME=' + SdkPath + '" && ';
+        {$ELSE}
+        JavaPrefix := 'export ANDROID_HOME="' + SdkPath + '" && ';
+        {$ENDIF}
+      end;
+      if FindBestJavaHome(BestJavaHome, BestJavaVer, BestJavaSource) and (BestJavaHome <> '') then
+      begin
+        {$IFDEF WINDOWS}
+        JavaPrefix := 'set "JAVA_HOME=' + BestJavaHome + '" && set "PATH=' + BestJavaHome + '\bin;%PATH%" && ';
+        {$ELSE}
+        JavaPrefix := 'export JAVA_HOME="' + BestJavaHome + '" && export PATH="' + BestJavaHome + '/bin:$PATH" && ';
+        {$ENDIF}
+      end;
+
       {$IFDEF WINDOWS}
-
-      if ARelease then
-        ExecuteProcess('cmd', '/c cd /d "' + AndroidDir + '" && gradlew.bat assembleRelease')
-
+      if ABundle then
+        ExecuteProcess('cmd', '/c ' + JavaPrefix + 'cd /d "' + AndroidDir + '" && gradlew.bat bundleRelease')
+      else if ARelease then
+        ExecuteProcess('cmd', '/c ' + JavaPrefix + 'cd /d "' + AndroidDir + '" && gradlew.bat assembleRelease')
       else
-        ExecuteProcess('cmd', '/c cd /d "' + AndroidDir + '" && gradlew.bat assembleDebug');
-
+        ExecuteProcess('cmd', '/c ' + JavaPrefix + 'cd /d "' + AndroidDir + '" && gradlew.bat assembleDebug');
       {$ELSE}
-
-      if ARelease then
-        ExecuteProcess('/bin/sh', '-c "cd ''' + AndroidDir + ''' && ./gradlew assembleRelease"')
+      if ABundle then
+        ExecuteProcess('/bin/sh', '-c "' + JavaPrefix + 'cd ''' + AndroidDir + ''' && ./gradlew bundleRelease"')
+      else if ARelease then
+        ExecuteProcess('/bin/sh', '-c "' + JavaPrefix + 'cd ''' + AndroidDir + ''' && ./gradlew assembleRelease"')
       else
-        ExecuteProcess('/bin/sh', '-c "cd ''' + AndroidDir + ''' && ./gradlew assembleDebug"');
-
+        ExecuteProcess('/bin/sh', '-c "' + JavaPrefix + 'cd ''' + AndroidDir + ''' && ./gradlew assembleDebug"');
       {$ENDIF}
 
-      if ARelease then
+      if ABundle then
+      begin
+        SourceAab := AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build' + DirectorySeparator + 'outputs' + DirectorySeparator + 'bundle' + DirectorySeparator + 'release' + DirectorySeparator + 'app-release.aab';
+        TargetAab := TBinDir + DirectorySeparator + CleanName + '-release.aab';
+        if FileExists(SourceAab) then
+        begin
+          CopyFile(SourceAab, TargetAab);
+          Result := True;
+          WriteLn('  [SUCCESS] Google Play Android App Bundle generated: mobile/bin/android/' + ExtractFileName(TargetAab));
+          WriteLn('  [INFO] Target: Google Play Console (Production / Internal Testing track)');
+          WriteLn('  [TIP] Upload bundle at: https://play.google.com/console');
+        end
+        else
+          WriteLn('  [WARNING] Expected AAB was not found at: ' + SourceAab);
+      end
+      else if ARelease then
       begin
         SourceApk := AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build' + DirectorySeparator + 'outputs' + DirectorySeparator + 'apk' + DirectorySeparator + 'release' + DirectorySeparator + 'app-release.apk';
         AltApk := AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build' + DirectorySeparator + 'outputs' + DirectorySeparator + 'apk' + DirectorySeparator + 'release' + DirectorySeparator + 'app-release-unsigned.apk';
@@ -11021,24 +12164,24 @@ var
         TargetApk := TBinDir + DirectorySeparator + CleanName + '-debug.apk';
       end;
 
-      if not FileExists(SourceApk) and (AltApk <> '') and FileExists(AltApk) then
-        SourceApk := AltApk;
-      if FileExists(SourceApk) then
+      if not ABundle then
       begin
-        CopyFile(SourceApk, TargetApk);
-        Result := True;
-        if ARelease then
-          WriteLn('  [SUCCESS] Mobile Android package generated: mobile/bin/android/' + ExtractFileName(TargetApk))
-        else
+        if not FileExists(SourceApk) and (AltApk <> '') and FileExists(AltApk) then
+          SourceApk := AltApk;
+        if FileExists(SourceApk) then
         begin
-          WriteLn('  [SUCCESS] Mobile Android package generated: mobile/bin/android/' + ExtractFileName(TargetApk));
-          WriteLn('  [TIP] To install on your connected device: adb install -r "mobile/bin/android/' + ExtractFileName(TargetApk) + '"');
-        end;
-      end
-
-      else
-      begin
-        WriteLn('  [WARNING] Expected APK was not found at: ' + SourceApk);
+          CopyFile(SourceApk, TargetApk);
+          Result := True;
+          if ARelease then
+            WriteLn('  [SUCCESS] Mobile Android package generated: mobile/bin/android/' + ExtractFileName(TargetApk))
+          else
+          begin
+            WriteLn('  [SUCCESS] Mobile Android package generated: mobile/bin/android/' + ExtractFileName(TargetApk));
+            WriteLn('  [TIP] To install on your connected device: adb install -r "mobile/bin/android/' + ExtractFileName(TargetApk) + '"');
+          end;
+        end
+        else
+          WriteLn('  [WARNING] Expected APK was not found at: ' + SourceApk);
       end;
     end
 
@@ -11064,9 +12207,14 @@ var
   procedure RunTarget(const ATarget: string);
   var
     TargetApk, TBinDir, AdbExe, AdbOutput, AdbTarget: string;
+    BootStatus, InstallOutput, LaunchOutput: string;
+    BootAttempts, InstallAttempts: Integer;
+    InstallSuccess: Boolean;
   begin
     if ATarget = 'android' then
     begin
+      if DirectoryExists(AndroidDir) then
+        EnsureAndroidGradleCompatibility(AndroidDir);
       TBinDir := BinDir + DirectorySeparator + 'android';
       if IsRelease then
         TargetApk := TBinDir + DirectorySeparator + CleanName + '-release.apk'
@@ -11082,9 +12230,16 @@ var
       AdbTarget := '';
       if UseEmulator then
       begin
+        if IsFreshEmulator then
+        begin
+          WriteLn('  [+] Fresh emulator requested (--fresh). Resetting active instances...');
+          KillAndroidEmulator;
+          Sleep(1000);
+        end;
+
         AdbTarget := '-e ';
         AdbOutput := '';
-        RunCommand(AdbExe, ['devices'], AdbOutput);
+        ExecCmdCapture('"' + AdbExe + '" devices', AdbOutput);
         if Pos('emulator-', AdbOutput) = 0 then
         begin
           WriteLn('  [+] No active emulator detected in ADB. Launching emulator...');
@@ -11092,24 +12247,44 @@ var
           WriteLn('  [+] Waiting for emulator to boot (adb -e wait-for-device)...');
 
           {$IFDEF WINDOWS}
-
           ExecuteProcess('cmd', '/c ' + AdbExe + ' -e wait-for-device');
-
           {$ELSE}
-
           ExecuteProcess('/bin/sh', '-c "' + AdbExe + ' -e wait-for-device"');
-
           {$ENDIF}
-
-          WriteLn('  [+] Waiting for emulator system to finalize boot...');
-          Sleep(4000);
+        end
+        else
+        begin
+          WriteLn('  [i] Connected to active Android Emulator session in ADB (emulator-5554).');
+          WriteLn('      (Tip: If emulator window is hidden or stuck, run with --fresh to force restart)');
         end;
+
+        WriteLn('  [+] Waiting for Android OS to finish booting (sys.boot_completed)...');
+        BootAttempts := 0;
+        repeat
+          BootStatus := '';
+          ExecCmdCapture('"' + AdbExe + '" -e shell getprop sys.boot_completed', BootStatus);
+          if Pos('1', Trim(BootStatus)) = 1 then Break;
+          Sleep(2000);
+          Inc(BootAttempts);
+        until BootAttempts >= 45;
+        Sleep(1500);
+
+        WriteLn('  [+] Waiting for Package Manager service (pm path android)...');
+        BootAttempts := 0;
+        repeat
+          BootStatus := '';
+          ExecCmdCapture('"' + AdbExe + '" -e shell pm path android', BootStatus);
+          if Pos('package:', BootStatus) > 0 then Break;
+          Sleep(1500);
+          Inc(BootAttempts);
+        until BootAttempts >= 20;
+        Sleep(1000);
       end
 
       else
       begin
         AdbOutput := '';
-        RunCommand(AdbExe, ['devices'], AdbOutput);
+        ExecCmdCapture('"' + AdbExe + '" devices', AdbOutput);
         if (Pos('emulator-', AdbOutput) > 0) and (Pos(#10, Trim(AdbOutput)) > 0) then
           AdbTarget := '-d ';
       end;
@@ -11117,19 +12292,45 @@ var
       if FileExists(TargetApk) then
       begin
         if UseEmulator then
-          WriteLn('Installing and running APK on Android Emulator via ADB: ' + TargetApk)
+          WriteLn('  [+] Installing APK on Android Emulator via ADB: ' + ExtractFileName(TargetApk))
         else
-          WriteLn('Installing and running APK on Android device via ADB: ' + TargetApk);
-        {$IFDEF WINDOWS}
+          WriteLn('  [+] Installing APK on Android device via ADB: ' + ExtractFileName(TargetApk));
 
-        ExecuteProcess('cmd', '/c ' + AdbExe + ' ' + AdbTarget + 'install -r "' + TargetApk + '"');
-        ExecuteProcess('cmd', '/c ' + AdbExe + ' ' + AdbTarget + 'shell am start -n ' + ActualAppId + '/.MainActivity');
+        InstallSuccess := False;
+        InstallAttempts := 0;
+        repeat
+          Inc(InstallAttempts);
+          InstallOutput := '';
+          ExecCmdCapture('"' + AdbExe + '" ' + AdbTarget + 'install -r "' + TargetApk + '" 2>&1', InstallOutput);
+          if Pos('Success', InstallOutput) > 0 then
+          begin
+            InstallSuccess := True;
+            Break;
+          end;
+          WriteLn('  [!] ADB install attempt ', InstallAttempts, ' notice: ', Trim(InstallOutput));
+          if InstallAttempts < 3 then
+          begin
+            WriteLn('  [*] Retrying installation in 2 seconds (attempt ', InstallAttempts + 1, ' of 3)...');
+            Sleep(2000);
+          end;
+        until InstallAttempts >= 3;
 
-        {$ELSE}
-
-        ExecuteProcess('/bin/sh', '-c "' + AdbExe + ' ' + AdbTarget + 'install -r \"' + TargetApk + '\""');
-        ExecuteProcess('/bin/sh', '-c "' + AdbExe + ' ' + AdbTarget + 'shell am start -n ' + ActualAppId + '/.MainActivity"');
-        {$ENDIF}
+        if InstallSuccess then
+        begin
+          WriteLn('  [SUCCESS] APK installed successfully!');
+          WriteLn('  [+] Launching application activity: ' + ActualAppId + '/.MainActivity ...');
+          LaunchOutput := '';
+          ExecCmdCapture('"' + AdbExe + '" ' + AdbTarget + 'shell am start -n ' + ActualAppId + '/.MainActivity', LaunchOutput);
+          if (Pos('Error', LaunchOutput) > 0) or (Pos('Exception', LaunchOutput) > 0) then
+            WriteLn('  [!] Activity launch notice: ', Trim(LaunchOutput))
+          else
+            WriteLn('  [SUCCESS] Application started on device/emulator!');
+        end
+        else
+        begin
+          WriteLn('  [ERROR] Failed to install APK after 3 attempts.');
+          WriteLn('          Error details: ', Trim(InstallOutput));
+        end;
       end
       else
       begin
@@ -11190,17 +12391,50 @@ var
 begin
   WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Mobile (Capacitor Engine) ===');
   IsRelease := False;
+  IsBundle := False;
   IsAllTargets := False;
   UseEmulator := False;
+  IsCheckOnly := False;
+  IsFreshEmulator := False;
+  IsNoBuild := False;
+  IsForceInit := False;
+  NeedsAndroidRecreate := False;
   TargetPlatform := '';
   SelectedAVD := '';
   EmulatorAction := '';
   ActualAppName := '';
   ActualAppId := '';
-  ParseArg(Arg1);
-  ParseArg(Arg2);
-  for i := 5 to ParamCount do
-    ParseArg(ParamStr(i));
+  RequestedCapVersion := '';
+
+  i := 3;
+  while i <= ParamCount do
+  begin
+    if (LowerCase(ParamStr(i)) = '--version') or (LowerCase(ParamStr(i)) = '-v') or
+       (LowerCase(ParamStr(i)) = '--target') or (LowerCase(ParamStr(i)) = '-t') then
+    begin
+      if i < ParamCount then
+      begin
+        Inc(i);
+        RequestedCapVersion := ParamStr(i);
+      end;
+    end
+    else if Copy(LowerCase(ParamStr(i)), 1, 10) = '--version=' then
+      RequestedCapVersion := Trim(Copy(ParamStr(i), 11, MaxInt))
+    else if Copy(LowerCase(ParamStr(i)), 1, 9) = '--target=' then
+      RequestedCapVersion := Trim(Copy(ParamStr(i), 10, MaxInt))
+    else if Copy(LowerCase(ParamStr(i)), 1, 3) = '-v=' then
+      RequestedCapVersion := Trim(Copy(ParamStr(i), 4, MaxInt))
+    else if Copy(LowerCase(ParamStr(i)), 1, 3) = '-t=' then
+      RequestedCapVersion := Trim(Copy(ParamStr(i), 4, MaxInt))
+    else if (LowerCase(ParamStr(i)) = '--check') or (LowerCase(ParamStr(i)) = '-c') or (LowerCase(ParamStr(i)) = 'check') then
+      IsCheckOnly := True
+    else
+      ParseArg(ParamStr(i));
+    Inc(i);
+  end;
+
+  if (SubCmd <> 'emulator') and (SubCmd <> 'kill') then
+    RequireBlaiseVueProject('bv mobile ' + SubCmd);
 
   MobileDir := GetCurrentDir + DirectorySeparator + 'mobile';
   BinDir := MobileDir + DirectorySeparator + 'bin';
@@ -11239,24 +12473,97 @@ begin
     if ActualAppId = '' then ActualAppId := ExtractJsonField(ExistingConfig, 'appId');
   end;
 
+  PkgJsonFile := GetCurrentDir + DirectorySeparator + 'package.json';
+  if FileExists(PkgJsonFile) then
+    PkgContent := ReadFileToString(PkgJsonFile)
+  else
+    PkgContent := '';
+
+  // Smart migration for projects cloned from demo-app template
+  if (LowerCase(ExtractFileName(GetCurrentDir)) <> 'demo-app') and
+     ((PkgContent = '') or (ExtractJsonField(PkgContent, 'name') <> 'demo-app')) then
+  begin
+    if (ActualAppName = 'BlaiseVue Demo') or (ActualAppId = 'com.blaisevue.demoapp') then
+    begin
+      ActualAppName := '';
+      ActualAppId := '';
+      NeedsAndroidRecreate := True;
+    end;
+  end;
+
+  if ActualAppName = '' then
+  begin
+    if PkgContent <> '' then
+      ActualAppName := ExtractJsonField(PkgContent, 'name');
+    if ActualAppName = '' then
+      ActualAppName := ExtractFileName(GetCurrentDir);
+  end;
   if ActualAppName = '' then ActualAppName := 'BlaiseVue Mobile';
-  if ActualAppId = '' then ActualAppId := 'com.blaisevue.app';
+
   CleanName := '';
   for i := 1 to Length(ActualAppName) do
   begin
     if (ActualAppName[i] in ['a'..'z', 'A'..'Z', '0'..'9']) then
       CleanName := CleanName + ActualAppName[i]
-
     else if CleanName <> '' then
       CleanName := CleanName + '_';
   end;
-
   if CleanName = '' then CleanName := 'MobileApp';
   if CleanName[1] in ['0'..'9'] then CleanName := 'App' + CleanName;
+
+  if ActualAppId = '' then
+    ActualAppId := 'com.blaisevue.' + LowerCase(CleanName);
+
   if TargetPlatform = '' then
     TargetPlatform := 'android';
 
-  if (SubCmd = 'init') or (SubCmd = 'sync') or (SubCmd = 'open') or (SubCmd = 'build') then
+  if NeedsAndroidRecreate then
+  begin
+    WriteLn('  [+] Auto-synchronizing legacy demo configuration to project: ' + ActualAppName + ' (' + ActualAppId + ')');
+    ConfigContent := '{' + #10 +
+      '  "appId": "' + ActualAppId + '",' + #10 +
+      '  "appName": "' + ActualAppName + '",' + #10 +
+      '  "webDir": "dist",' + #10 +
+      '  "bundledWebRuntime": false,' + #10 +
+      '  "android": {' + #10 +
+      '    "path": "mobile/android"' + #10 +
+      '  },' + #10 +
+      '  "ios": {' + #10 +
+      '    "path": "mobile/ios"' + #10 +
+      '  }' + #10 +
+      '}';
+    WriteStringToFile(CapConfigFile, ConfigContent);
+    WriteStringToFile(MobileCapConfigFile, ConfigContent);
+
+    if FileExists(BinDir + DirectorySeparator + 'android' + DirectorySeparator + 'BlaiseVue_Demo-debug.apk') then
+      DeleteFile(BinDir + DirectorySeparator + 'android' + DirectorySeparator + 'BlaiseVue_Demo-debug.apk');
+    if FileExists(BinDir + DirectorySeparator + 'android' + DirectorySeparator + 'BlaiseVue_Demo-release.apk') then
+      DeleteFile(BinDir + DirectorySeparator + 'android' + DirectorySeparator + 'BlaiseVue_Demo-release.apk');
+    if FileExists(BinDir + DirectorySeparator + 'android' + DirectorySeparator + 'BlaiseVue_Demo-release.aab') then
+      DeleteFile(BinDir + DirectorySeparator + 'android' + DirectorySeparator + 'BlaiseVue_Demo-release.aab');
+
+    if FileExists(AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build.gradle') then
+    begin
+      GradleText := ReadFileToString(AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build.gradle');
+      if Pos('com.blaisevue.demoapp', GradleText) > 0 then
+      begin
+        GradleText := StringReplace(GradleText, 'applicationId "com.blaisevue.demoapp"', 'applicationId "' + ActualAppId + '"', [rfReplaceAll]);
+        WriteStringToFile(AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build.gradle', GradleText);
+      end;
+    end;
+
+    if FileExists(AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'src' + DirectorySeparator + 'main' + DirectorySeparator + 'res' + DirectorySeparator + 'values' + DirectorySeparator + 'strings.xml') then
+    begin
+      GradleText := ReadFileToString(AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'src' + DirectorySeparator + 'main' + DirectorySeparator + 'res' + DirectorySeparator + 'values' + DirectorySeparator + 'strings.xml');
+      if Pos('BlaiseVue Demo', GradleText) > 0 then
+      begin
+        GradleText := StringReplace(GradleText, '>BlaiseVue Demo<', '>' + ActualAppName + '<', [rfReplaceAll]);
+        WriteStringToFile(AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'src' + DirectorySeparator + 'main' + DirectorySeparator + 'res' + DirectorySeparator + 'values' + DirectorySeparator + 'strings.xml', GradleText);
+      end;
+    end;
+  end;
+
+  if (SubCmd = 'init') or (SubCmd = 'sync') or (SubCmd = 'open') or (SubCmd = 'build') or (SubCmd = 'upgrade') or (SubCmd = 'migrate') or (SubCmd = 'run') then
   begin
     if not HasCommand('node') then
     begin
@@ -11265,9 +12572,26 @@ begin
     end;
   end;
 
+  // Auto-scaffold mobile platform transparently if missing
+  if (SubCmd = 'build') or (SubCmd = 'run') or (SubCmd = 'sync') then
+  begin
+    if (not FileExists(CapConfigFile)) or
+       (not DirectoryExists(MobileDir)) or
+       ((TargetPlatform = 'android') and not DirectoryExists(AndroidDir)) then
+    begin
+      WriteLn('  [+] Mobile platform not yet initialized. Auto-scaffolding for project: ' + ActualAppName + ' ...');
+      CmdMobile('init', ActualAppName, ActualAppId);
+    end;
+  end;
+
   if (SubCmd = 'remove') or (SubCmd = 'rm') or (SubCmd = 'del') then
   begin
     CmdRemoveMobile(IsRelease or (Arg1 = '-y') or (Arg1 = '--yes') or (Arg1 = '-f') or (Arg1 = '--force') or (Arg2 = '-y') or (Arg2 = '--yes') or (Arg2 = '-f') or (Arg2 = '--force'));
+    Exit;
+  end
+  else if SubCmd = 'kill' then
+  begin
+    KillAndroidEmulator;
     Exit;
   end
   else if (SubCmd = 'init') then
@@ -11305,29 +12629,84 @@ begin
 
       '}';
 
-    if not FileExists(CapConfigFile) then
+    if not FileExists(CapConfigFile) or (ParamCount >= 3) or IsForceInit then
     begin
       WriteStringToFile(CapConfigFile, ConfigContent);
-      WriteLn('  [+] Generated capacitor.config.json (appId: ' + ActualAppId + ', appName: ' + ActualAppName + ')');
-    end
-
-    else
-      WriteLn('  [i] capacitor.config.json already exists.');
-
-    if not FileExists(MobileCapConfigFile) then
       WriteStringToFile(MobileCapConfigFile, ConfigContent);
+      WriteLn('  [+] Updated capacitor.config.json (appId: ' + ActualAppId + ', appName: ' + ActualAppName + ')');
+    end
+    else
+    begin
+      WriteLn('  [i] capacitor.config.json already exists.');
+      if not FileExists(MobileCapConfigFile) then
+        WriteStringToFile(MobileCapConfigFile, ConfigContent);
+    end;
 
-    // 2. Ensure @capacitor/core and @capacitor/cli are installed
+    // 2. Ensure @capacitor/core and @capacitor/cli are installed with requested version
+    CapTag := '';
+    CapVerDisplay := 'latest (Capacitor 8.x)';
+    if RequestedCapVersion <> '' then
+    begin
+      if (RequestedCapVersion = '8') or (RequestedCapVersion = 'v8') or (RequestedCapVersion = '8.x') then
+      begin
+        CapTag := '@^8.0.0';
+        CapVerDisplay := 'v8 LTS';
+      end
+      else if (RequestedCapVersion = '7') or (RequestedCapVersion = 'v7') or (RequestedCapVersion = '7.x') then
+      begin
+        CapTag := '@^7.0.0';
+        CapVerDisplay := 'v7 Legacy';
+      end
+      else if (RequestedCapVersion = '6') or (RequestedCapVersion = 'v6') or (RequestedCapVersion = '6.x') then
+      begin
+        CapTag := '@^6.0.0';
+        CapVerDisplay := 'v6 Legacy';
+      end
+      else if (LowerCase(RequestedCapVersion) = 'next') or (LowerCase(RequestedCapVersion) = 'beta') then
+      begin
+        CapTag := '@next';
+        CapVerDisplay := 'next (preview/beta)';
+      end
+      else if LowerCase(RequestedCapVersion) = 'latest' then
+      begin
+        CapTag := '@latest';
+        CapVerDisplay := 'latest';
+      end
+      else
+      begin
+        if Copy(RequestedCapVersion, 1, 1) = '@' then
+          CapTag := RequestedCapVersion
+        else
+          CapTag := '@' + RequestedCapVersion;
+        CapVerDisplay := RequestedCapVersion;
+      end;
+    end;
 
-    WriteLn('  [+] Installing Capacitor dependencies (@capacitor/core, @capacitor/cli, @capacitor/android)...');
+    WriteLn('  [+] Installing Capacitor dependencies (version: ' + CapVerDisplay + ')...');
 
     {$IFDEF WINDOWS}
-    ExecuteProcess('cmd', '/c npm install @capacitor/core @capacitor/cli @capacitor/android --save-dev');
+    ExecuteProcess('cmd', '/c npm install @capacitor/core' + CapTag + ' @capacitor/cli' + CapTag + ' @capacitor/android' + CapTag + ' --save-dev');
     {$ELSE}
-    ExecuteProcess('/bin/sh', '-c "npm install @capacitor/core @capacitor/cli @capacitor/android --save-dev"');
+    ExecuteProcess('/bin/sh', '-c "npm install @capacitor/core' + CapTag + ' @capacitor/cli' + CapTag + ' @capacitor/android' + CapTag + ' --save-dev"');
     {$ENDIF}
 
-    // 3. Add Android platform if not present
+    // 3. Add Android platform if not present or if appId changed
+    NeedsAndroidRecreate := False;
+    if DirectoryExists(AndroidDir) then
+    begin
+      if FileExists(AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build.gradle') then
+      begin
+        GradleText := ReadFileToString(AndroidDir + DirectorySeparator + 'app' + DirectorySeparator + 'build.gradle');
+        if (Pos(ActualAppId, GradleText) = 0) then
+          NeedsAndroidRecreate := True;
+      end;
+      if NeedsAndroidRecreate or IsForceInit then
+      begin
+        WriteLn('  [*] Re-scaffolding native Android project to match ' + ActualAppId + ' ...');
+        DeleteDir(AndroidDir);
+      end;
+    end;
+
     if not DirectoryExists(AndroidDir) then
     begin
       WriteLn('  [+] Adding Android native project (npx cap add android)...');
@@ -11337,10 +12716,15 @@ begin
       {$ELSE}
       ExecuteProcess('/bin/sh', '-c "npx cap add android"');
       {$ENDIF}
+      if EnsureAndroidGradleCompatibility(AndroidDir) then
+        WriteLn('  [+] Auto-configured Android Gradle compatibility (Java 17 LTS / Release signing).');
     end
-
     else
+    begin
       WriteLn('  [i] Native android/ directory already initialized at: ' + AndroidDir);
+      if EnsureAndroidGradleCompatibility(AndroidDir) then
+        WriteLn('  [+] Auto-configured Android Gradle compatibility (Java 17 LTS / Release signing).');
+    end;
 
     // 4. Generate README.md
 
@@ -11348,7 +12732,7 @@ begin
     begin
       ReadmeContent :=
 
-        '# ' + ActualAppName + ' (BlaiseVue 3.5 Mobile)' + #10 +
+        '# ' + ActualAppName + ' (BlaiseVue ' + GetCliMajorMinor + ' Mobile)' + #10 +
 
         '' + #10 +
 
@@ -11364,7 +12748,7 @@ begin
 
         '- `bin/`: Platform-segregated ready-to-install packages:' + #10 +
 
-        '  - `bin/android/`: Compiled APKs (`' + CleanName + '-debug.apk`, `' + CleanName + '-release.apk`).' + #10 +
+        '  - `bin/android/`: Compiled packages (`' + CleanName + '-debug.apk`, `' + CleanName + '-release.apk`, `' + CleanName + '-release.aab`).' + #10 +
 
         '  - `bin/ios/`: Compiled IPAs.' + #10 +
 
@@ -11386,7 +12770,9 @@ begin
 
         'bv mobile build android            # Debug APK' + #10 +
 
-        'bv mobile build android --release  # Release APK (optimized)' + #10 +
+        'bv mobile build android --release  # Release APK (optimized / local testing)' + #10 +
+
+        'bv mobile build android --bundle   # Android App Bundle (.aab) for Google Play Console' + #10 +
 
         '' + #10 +
 
@@ -11430,6 +12816,163 @@ begin
     WriteLn('Run "bv mobile build android" to compile APK to mobile/bin/android/.');
   end
 
+  else if (SubCmd = 'upgrade') or (SubCmd = 'migrate') then
+  begin
+    PkgJsonFile := GetCurrentDir + DirectorySeparator + 'package.json';
+    PkgContent := '';
+    if FileExists(PkgJsonFile) then
+      PkgContent := ReadFileToString(PkgJsonFile)
+    else if FileExists(MobileDir + DirectorySeparator + 'package.json') then
+    begin
+      PkgJsonFile := MobileDir + DirectorySeparator + 'package.json';
+      PkgContent := ReadFileToString(PkgJsonFile);
+    end;
+
+    if (Pos('@capacitor', PkgContent) = 0) and not DirectoryExists(MobileDir) and not FileExists(CapConfigFile) and not FileExists(MobileCapConfigFile) then
+    begin
+      WriteLn('  [!] No Capacitor project found in current directory.');
+      WriteLn('      Run "bv mobile init" to scaffold a mobile project first.');
+      Exit;
+    end;
+
+    // Detect currently installed Capacitor version
+    CurrentCapVer := '';
+    if ExecCmdCapture('npx --no-install cap --version 2>&1', CurrentCapVer) and (CurrentCapVer <> '') and (Pos('error', LowerCase(CurrentCapVer)) = 0) then
+      CurrentCapVer := Trim(CurrentCapVer)
+    else
+    begin
+      CurrentCapVer := ExtractJsonField(PkgContent, '@capacitor/core');
+      if CurrentCapVer = '' then CurrentCapVer := ExtractJsonField(PkgContent, '@capacitor/cli');
+      if (Length(CurrentCapVer) > 0) and ((CurrentCapVer[1] = '^') or (CurrentCapVer[1] = '~')) then
+        CurrentCapVer := Copy(CurrentCapVer, 2, MaxInt);
+    end;
+
+    if CurrentCapVer = '' then
+      CurrentCapVer := 'unknown';
+
+    WriteLn('Checking Capacitor versions...');
+    WriteLn('  [i] Installed Capacitor version: v' + CurrentCapVer);
+
+    // Query NPM registry for latest version
+    LatestCapVer := '';
+    if ExecCmdCapture('npm view @capacitor/core version 2>&1', LatestCapVer) then
+      LatestCapVer := Trim(LatestCapVer);
+
+    if LatestCapVer <> '' then
+      WriteLn('  [i] Latest stable on npm:        v' + LatestCapVer)
+    else
+      WriteLn('  [!] Could not connect to npm registry to fetch latest version.');
+
+    if IsCheckOnly then
+    begin
+      WriteLn('');
+      if (LatestCapVer <> '') and (CurrentCapVer <> 'unknown') then
+      begin
+        if CurrentCapVer = LatestCapVer then
+          WriteLn('  [v] All Capacitor dependencies are up to date!')
+        else
+        begin
+          WriteLn('  [*] An update is available (v' + CurrentCapVer + ' -> v' + LatestCapVer + ').');
+          WriteLn('      Run "bv mobile upgrade" to upgrade dependencies and migrate native platforms.');
+        end;
+      end
+      else
+        WriteLn('  Run "bv mobile upgrade" to upgrade Capacitor dependencies.');
+      Exit;
+    end;
+
+    // Execution Mode
+    WriteLn('');
+    WriteLn('======================================================================');
+    WriteLn('  Starting Native Capacitor Upgrade & Migration Workflow');
+    WriteLn('======================================================================');
+
+    // 1. Resolve Target Version Tag
+    CapTag := '';
+    CapVerDisplay := 'latest stable';
+    if RequestedCapVersion <> '' then
+    begin
+      if (RequestedCapVersion = '8') or (RequestedCapVersion = 'v8') or (RequestedCapVersion = '8.x') then
+      begin
+        CapTag := '@^8.0.0';
+        CapVerDisplay := 'v8 LTS';
+      end
+      else if (RequestedCapVersion = '7') or (RequestedCapVersion = 'v7') or (RequestedCapVersion = '7.x') then
+      begin
+        CapTag := '@^7.0.0';
+        CapVerDisplay := 'v7 Legacy';
+      end
+      else if (RequestedCapVersion = '6') or (RequestedCapVersion = 'v6') or (RequestedCapVersion = '6.x') then
+      begin
+        CapTag := '@^6.0.0';
+        CapVerDisplay := 'v6 Legacy';
+      end
+      else if (LowerCase(RequestedCapVersion) = 'next') or (LowerCase(RequestedCapVersion) = 'beta') then
+      begin
+        CapTag := '@next';
+        CapVerDisplay := 'next (preview/beta)';
+      end
+      else if LowerCase(RequestedCapVersion) = 'latest' then
+      begin
+        CapTag := '@latest';
+        CapVerDisplay := 'latest stable';
+      end
+      else
+      begin
+        if Copy(RequestedCapVersion, 1, 1) = '@' then
+          CapTag := RequestedCapVersion
+        else
+          CapTag := '@' + RequestedCapVersion;
+        CapVerDisplay := RequestedCapVersion;
+      end;
+    end
+    else
+    begin
+      CapTag := '@latest';
+      CapVerDisplay := 'latest stable (@latest)';
+    end;
+
+    ExtraPkgs := '';
+    if DirectoryExists(IOSDir) or (Pos('@capacitor/ios', PkgContent) > 0) then
+      ExtraPkgs := ' @capacitor/ios' + CapTag;
+
+    // 2. npm install dependencies
+    WriteLn('  [1/4] Updating Capacitor packages to ' + CapVerDisplay + '...');
+    {$IFDEF WINDOWS}
+    ExecuteProcess('cmd', '/c npm install @capacitor/core' + CapTag + ' @capacitor/cli' + CapTag + ' @capacitor/android' + CapTag + ExtraPkgs + ' --save-dev');
+    {$ELSE}
+    ExecuteProcess('/bin/sh', '-c "npm install @capacitor/core' + CapTag + ' @capacitor/cli' + CapTag + ' @capacitor/android' + CapTag + ExtraPkgs + ' --save-dev"');
+    {$ENDIF}
+
+    // 3. npx cap migrate
+    WriteLn('  [2/4] Executing native Capacitor platform migration (npx cap migrate)...');
+    {$IFDEF WINDOWS}
+    ExecuteProcess('cmd', '/c npx cap migrate --noprompt');
+    {$ELSE}
+    ExecuteProcess('/bin/sh', '-c "npx cap migrate --noprompt"');
+    {$ENDIF}
+
+    // 4. Universal Self-Healing on Android Gradle
+    WriteLn('  [3/4] Running Universal Self-Healing on native Android configuration...');
+    if DirectoryExists(AndroidDir) then
+    begin
+      if EnsureAndroidGradleCompatibility(AndroidDir) then
+        WriteLn('        [+] Preserved Java 17 LTS, JVM toolchain & keystore signing configurations.')
+      else
+        WriteLn('        [OK] Android Gradle configuration is optimal.');
+    end;
+
+    // 5. Capacitor Sync
+    WriteLn('  [4/4] Synchronizing build artifacts with native platforms...');
+    CmdMobile('sync', TargetPlatform);
+
+    WriteLn('');
+    WriteLn('======================================================================');
+    WriteLn('  [v] Capacitor upgraded successfully to ' + CapVerDisplay + '!');
+    WriteLn('======================================================================');
+    WriteLn('Run "bv mobile build android" to compile the upgraded native APK.');
+  end
+
   else if (SubCmd = 'sync') then
   begin
     WriteLn('Synchronizing BlaiseVue dist/ with native Mobile platform...');
@@ -11451,6 +12994,12 @@ begin
       {$ENDIF}
     end;
 
+    if DirectoryExists(AndroidDir) then
+    begin
+      if EnsureAndroidGradleCompatibility(AndroidDir) then
+        WriteLn('  [+] Synchronized Android Gradle compatibility (Java 17 LTS / Release signing).');
+    end;
+
     WriteLn('Mobile assets synchronized successfully!');
   end
 
@@ -11461,18 +13010,24 @@ begin
     if IsAllTargets or (TargetPlatform = 'all') then
     begin
       WriteLn('Building native Mobile application for ALL platforms (android, ios)...');
-      BuildSingleTarget('android', IsRelease);
+      BuildSingleTarget('android', IsRelease, IsBundle);
       BuildSingleTarget('ios', IsRelease);
     end
 
     else
     begin
-      BuildSingleTarget(TargetPlatform, IsRelease);
+      BuildSingleTarget(TargetPlatform, IsRelease, IsBundle);
     end;
   end
 
   else if (SubCmd = 'run') then
   begin
+    if not IsNoBuild then
+    begin
+      WriteLn('Building and synchronizing native Mobile application...');
+      CmdMobile('sync', TargetPlatform);
+      BuildSingleTarget(TargetPlatform, IsRelease, IsBundle);
+    end;
     RunTarget(TargetPlatform);
   end
 
@@ -11522,15 +13077,20 @@ begin
       RunTarget('android');
     end
 
+    else if EmulatorAction = 'kill' then
+    begin
+      KillAndroidEmulator;
+    end
+
     else
     begin
-      WriteLn('Usage: bv mobile emulator <list|start [name]|run [name]>');
+      WriteLn('Usage: bv mobile emulator <list|start [name]|run [name]|kill>');
     end;
   end
 
   else
   begin
-    WriteLn('Usage: bv mobile <init [name] [id]|sync [target]|build [target] [--release]|run [target] [--emulator [name]]|open [target]|emulator <list|start|run>>');
+    WriteLn('Usage: bv mobile <init [name] [id] [--version=<v>]|upgrade [--check]|sync [target]|build [target] [--release]|run [target] [--emulator [name]]|open [target]|emulator <list|start|run>>');
     WriteLn('       Targets: android | ios | all (default: android)');
   end;
 end;
@@ -11655,6 +13215,7 @@ var
     end;
   end;
 begin
+  RequireBlaiseVueProject('bv desktop ' + SubCmd);
   WriteLn('=== BlaiseVue ' + GetCliMajorMinor + ' Desktop (WebUI & Lazarus IDE) ===');
 
   {$IFDEF MSWINDOWS}
@@ -15548,7 +17109,7 @@ begin
   WriteLn('Next steps:');
   WriteLn('  1. Compile native server:    bv mormot build (or bv mormot build --release)');
   WriteLn('  2. Compile reactive app:     bv run build (or bv build)');
-  WriteLn('  3. Start full-stack server:  bv mormot run');
+  WriteLn('  3. Start full-stack server:  bv mormot run (or bv mormot run --release)');
   WriteLn('');
 end;
 
@@ -17061,7 +18622,7 @@ begin
   WriteLn('Next steps:');
   WriteLn('  1. Compile native server:    bv mormot build (or bv mormot build --release)');
   WriteLn('  2. Compile reactive app:     bv run build (or bv build)');
-  WriteLn('  3. Start full-stack server:  bv mormot run');
+  WriteLn('  3. Start full-stack server:  bv mormot run (or bv mormot run --release)');
   WriteLn('  4. Access in browser:        http://localhost:8090/#/login');
   WriteLn('');
 end;
@@ -18468,7 +20029,7 @@ begin
   WriteLn('Next steps:');
   WriteLn('  1. Compile native server:    bv mormot build (or bv mormot build --release)');
   WriteLn('  2. Compile reactive app:     bv run build (or bv build)');
-  WriteLn('  3. Start full-stack server:  bv mormot run');
+  WriteLn('  3. Start full-stack server:  bv mormot run (or bv mormot run --release)');
   WriteLn('  4. Explore API in browser:   http://localhost:8090/api/docs');
   WriteLn('');
 end;
@@ -19832,6 +21393,50 @@ begin
   Result := StartPort;
 end;
 
+{ Gracefully terminates mORMot 2 server processes, verifies socket release, and falls back to force kill. }
+function KillMormotServer(CheckPort: Word = 0): Boolean;
+var
+  PortReleased: Boolean;
+  Attempts: Integer;
+begin
+  WriteLn('  [+] Stopping mORMot 2 native server instances...');
+
+  // Step 1: Graceful termination attempt
+  {$IFDEF WINDOWS}
+  ExecuteProcess('cmd', '/c taskkill /IM server.exe > nul 2>&1');
+  {$ELSE}
+  ExecuteProcess('/bin/sh', ['-c', 'killall -15 server > /dev/null 2>&1']);
+  {$ENDIF}
+  Sleep(300);
+
+  // Step 2: Force termination with entire process tree (/T)
+  {$IFDEF WINDOWS}
+  ExecuteProcess('cmd', '/c taskkill /F /T /IM server.exe > nul 2>&1');
+  {$ELSE}
+  ExecuteProcess('/bin/sh', ['-c', 'pkill -9 -f "server(\.exe)?" > /dev/null 2>&1']);
+  {$ENDIF}
+
+  // Step 3: Verify port release if a port was specified or discovered
+  PortReleased := True;
+  if CheckPort > 0 then
+  begin
+    Attempts := 0;
+    while (Attempts < 15) and not IsTcpPortAvailable(CheckPort) do
+    begin
+      Sleep(150);
+      Inc(Attempts);
+    end;
+    PortReleased := IsTcpPortAvailable(CheckPort);
+    if PortReleased then
+      WriteLn('  [v] Port ' + IntToStr(CheckPort) + ' is free and released.')
+    else
+      WriteLn('  [!] Notice: Port ' + IntToStr(CheckPort) + ' is still occupied by another active service.');
+  end;
+
+  WriteLn('  [v] All server.exe processes terminated.');
+  Result := PortReleased;
+end;
+
 { Central CLI orchestrator for the full-stack Synopse mORMot 2 backend engine (bv mormot). }
 procedure CmdServer(const SubCmd: string; const Arg1: string = ''; const Arg2: string = '');
 
@@ -19839,7 +21444,7 @@ var
   ServerDir, BinDir, LibDir, TemplateDir, DbEngineArg, EnvFile, EnvContent: string;
   ProjectRoot, DeployDir, DistDir, ZipFile: string;
   LprFile, TargetExe, MormotPath, FpcCmd, PortArg, ExtraArgs: string;
-  IsRelease, HasZip, UserSpecifiedPort: Boolean;
+  IsRelease, HasZip, UserSpecifiedPort, IsFresh: Boolean;
   TargetPort, OrigPort: Word;
   EnvLines: TStringList;
   EnvLine: string;
@@ -19863,16 +21468,12 @@ var
     else if (Copy(S, 1, 7) = '--port=') then
       PortArg := Copy(A, 8, MaxInt)
     else if (Copy(S, 1, 6) = '--out=') then
-      DeployDir := Copy(A, 7, MaxInt);
+      DeployDir := Copy(A, 7, MaxInt)
+    else if S = '--fresh' then
+      IsFresh := True;
   end;
 begin
-  ProjectRoot := GetCurrentDir;
-  if not DirectoryExists(ProjectRoot + DirectorySeparator + 'server') and
-
-     FileExists(ProjectRoot + DirectorySeparator + 'server.lpr') then
-  begin
-    ProjectRoot := ExpandFileName(ProjectRoot + DirectorySeparator + '..');
-  end;
+  ProjectRoot := RequireBlaiseVueProject('bv mormot ' + SubCmd);
 
   ServerDir := ProjectRoot + DirectorySeparator + 'server';
   BinDir := ServerDir + DirectorySeparator + 'bin';
@@ -19883,6 +21484,7 @@ begin
   DeployDir := ProjectRoot + DirectorySeparator + 'deploy';
   IsRelease := False;
   HasZip := False;
+  IsFresh := False;
   PortArg := '';
   DbEngineArg := 'sqlite';
   for i := 2 to ParamCount do
@@ -19994,9 +21596,9 @@ begin
     WriteLn('  [+] Full-Stack mORMot 2 server template scaffolded successfully in server/ !');
     WriteLn('');
     WriteLn('Next steps:');
-    WriteLn('  1. Run "bv build" (or "bv run build") to compile your reactive frontend to dist/');
+    WriteLn('  1. Run "bv build" (or "bv build --release") to compile your reactive frontend to dist/');
     WriteLn('  2. Run "bv mormot build" (or "bv mormot build --release") to compile the native server');
-    WriteLn('  3. Run "bv mormot run" to launch the server on port 8090');
+    WriteLn('  3. Run "bv mormot run" (or "bv mormot run --release") to launch the server on port 8090');
     WriteLn('  Or open server/server.lpi in Lazarus IDE and press F9!');
   end
 
@@ -20089,7 +21691,10 @@ begin
     if FileExists(TargetExe) then
     begin
       WriteLn('  [SUCCESS] Native mORMot 2 server compiled successfully: ' + TargetExe);
-      WriteLn('  [TIP] Run "bv mormot run" to start the server.');
+      if IsRelease then
+        WriteLn('  [TIP] Run "bv mormot run --release" to start the server in release mode.')
+      else
+        WriteLn('  [TIP] Run "bv mormot run" to start the server (or "bv mormot run --release" for release mode).');
     end
     else
     begin
@@ -20100,9 +21705,28 @@ begin
 
   else if (SubCmd = 'run') then
   begin
-    if not FileExists(TargetExe) or IsRelease then
+    if IsRelease then
     begin
-      CmdServer('build', Arg1, Arg2);
+      WriteLn('  [+] Compiling reactive frontend in RELEASE mode (bv build --release)...');
+      ChDir(ProjectRoot);
+      CmdRunBuild;
+      WriteLn('  [+] Compiling native server in RELEASE mode (bv mormot build --release)...');
+      CmdServer('build', '--release');
+    end
+    else
+    begin
+      if (not FileExists(ProjectRoot + DirectorySeparator + 'dist' + DirectorySeparator + 'index.html') or
+          not FileExists(ProjectRoot + DirectorySeparator + 'dist' + DirectorySeparator + 'js' + DirectorySeparator + 'main.js')) and
+         DirectoryExists(ProjectRoot + DirectorySeparator + 'src') then
+      begin
+        WriteLn('  [INFO] Frontend dist/ bundle not found. Building frontend before starting mORMot 2 server...');
+        CmdBuild;
+      end;
+
+      if not FileExists(TargetExe) then
+      begin
+        CmdServer('build');
+      end;
     end;
 
     if not FileExists(TargetExe) then
@@ -20142,29 +21766,51 @@ begin
     if PortArg <> '' then
       TargetPort := StrToIntDef(PortArg, 8090);
 
-    {$IFDEF WINDOWS}
-    ExecuteProcess('cmd', '/c taskkill /F /IM server.exe > nul 2>&1');
-    {$ENDIF}
+    if IsFresh then
+    begin
+      WriteLn('  [+] Fresh mORMot server requested (--fresh). Resetting active instances...');
+      KillMormotServer(TargetPort);
+      Sleep(200);
+    end
+    else
+    begin
+      {$IFDEF WINDOWS}
+      ExecuteProcess('cmd', '/c taskkill /F /IM server.exe > nul 2>&1');
+      {$ENDIF}
+    end;
 
     if not IsTcpPortAvailable(TargetPort) then
     begin
-      if UserSpecifiedPort then
+      if IsFresh then
       begin
-        WriteLn('  [WARNING] Port ' + IntToStr(TargetPort) + ' is reported in use or locked by a lingering socket.');
-        WriteLn('            Server will attempt to bind, but if connections hang, specify another port.');
-      end
-      else
+        KillMormotServer(TargetPort);
+        Sleep(200);
+      end;
+
+      if not IsTcpPortAvailable(TargetPort) then
       begin
-        OrigPort := TargetPort;
-        TargetPort := FindNextAvailableTcpPort(TargetPort + 1);
-        PortArg := IntToStr(TargetPort);
-        WriteLn('  [!] Notice: Default port ' + IntToStr(OrigPort) + ' is busy or locked by a lingering socket.');
-        WriteLn('  [+] Automatically switched to available port: ' + PortArg);
+        if UserSpecifiedPort then
+        begin
+          WriteLn('  [WARNING] Port ' + IntToStr(TargetPort) + ' is reported in use or locked by a lingering socket.');
+          WriteLn('            Tip: Run "bv mormot kill" or use "bv mormot run --fresh".');
+        end
+        else
+        begin
+          OrigPort := TargetPort;
+          TargetPort := FindNextAvailableTcpPort(TargetPort + 1);
+          PortArg := IntToStr(TargetPort);
+          WriteLn('  [!] Notice: Default port ' + IntToStr(OrigPort) + ' is busy or locked by a lingering socket.');
+          WriteLn('  [+] Automatically switched to available port: ' + PortArg);
+          WriteLn('      (Tip: Run "bv mormot run --fresh" to terminate previous instances and keep port ' + IntToStr(OrigPort) + ')');
+        end;
       end;
     end;
 
     ExtraArgs := ' --port ' + IntToStr(TargetPort);
-    WriteLn('Starting BlaiseVue mORMot 2 Native Server...');
+    if IsRelease then
+      WriteLn('Starting BlaiseVue mORMot 2 Native Server [RELEASE MODE]...')
+    else
+      WriteLn('Starting BlaiseVue mORMot 2 Native Server [DEBUG MODE]...');
     WriteLn('Executable: ' + TargetExe);
     WriteLn('Port:       ' + IntToStr(TargetPort));
     WriteLn('');
@@ -20176,15 +21822,36 @@ begin
     {$ENDIF}
   end
 
-  else if (SubCmd = 'kill') or (SubCmd = 'stop') then
+  else if SubCmd = 'kill' then
   begin
-    WriteLn('Terminating mORMot 2 native server instances...');
-    {$IFDEF WINDOWS}
-    ExecuteProcess('cmd', '/c taskkill /F /IM server.exe > nul 2>&1');
-    {$ELSE}
-    ExecuteProcess('/bin/sh', ['-c', 'killall -9 server > /dev/null 2>&1']);
-    {$ENDIF}
-    WriteLn('  [+] All server.exe processes terminated. Ports released.');
+    TargetPort := 8090;
+    if PortArg <> '' then
+      TargetPort := StrToIntDef(PortArg, 8090)
+    else
+    begin
+      EnvFile := ProjectRoot + DirectorySeparator + '.env';
+      if not FileExists(EnvFile) then
+        EnvFile := ServerDir + DirectorySeparator + '.env';
+      if FileExists(EnvFile) then
+      begin
+        EnvLines := TStringList.Create;
+        try
+          EnvLines.LoadFromFile(EnvFile);
+          for i := 0 to EnvLines.Count - 1 do
+          begin
+            EnvLine := Trim(EnvLines[i]);
+            if (EnvLine <> '') and (EnvLine[1] <> '#') and (Pos('PORT=', UpperCase(EnvLine)) = 1) then
+            begin
+              TargetPort := StrToIntDef(Trim(Copy(EnvLine, 6, MaxInt)), 8090);
+              Break;
+            end;
+          end;
+        finally
+          EnvLines.Free;
+        end;
+      end;
+    end;
+    KillMormotServer(TargetPort);
   end
 
   else if (SubCmd = 'status') then
@@ -20285,7 +21952,7 @@ begin
 
     // 1. Build frontend in production mode
 
-    WriteLn('[1/4] Compiling reactive frontend (bv run build)...');
+    WriteLn('[1/4] Compiling reactive frontend (bv build --release)...');
     ChDir(ProjectRoot);
     CmdRunBuild;
     DistDir := ProjectRoot + DirectorySeparator + 'dist';
@@ -20425,7 +22092,7 @@ begin
     WriteLn('Usage: bv mormot <init|build [--release]|run [--release] [--port <p>]|status [--port <p>]|deploy [--zip] [--port <p>]|crud <Model> [field:type...]|auth|docs|docker>');
     WriteLn('  init                  Scaffolds mORMot 2 backend server in server/');
     WriteLn('  build [--release]     Compiles native server with Free Pascal');
-    WriteLn('  run [--port <port>]   Launches native server');
+    WriteLn('  run [--release] [--port <port>] Launches native server (debug or release)');
     WriteLn('  status [--port <p>]   Queries running server health endpoint (/api/status)');
     WriteLn('  deploy [--zip]        Packages standalone production bundle (deploy/ and deploy.zip)');
     WriteLn('  crud <Model> [f:t...] Scaffolds full-stack ORM model, REST API & reactive DataGrid');
@@ -20649,29 +22316,6 @@ procedure CmdUse(const ProjName: string); forward;
 procedure CmdEnter; forward;
 procedure RunCockpitShell(const InitialName, InitialPath: string); forward;
 
-{ Validates whether a directory contains a valid BlaiseVue project structure. }
-function IsValidBlaiseVueProject(const ADir: string = ''): Boolean;
-var
-  TargetDir, PkgContent: string;
-begin
-  if ADir = '' then
-    TargetDir := IncludeTrailingPathDelimiter(GetCurrentDir)
-  else
-    TargetDir := IncludeTrailingPathDelimiter(ExpandFileName(ADir));
-
-  Result := False;
-  if FileExists(TargetDir + 'app.cfg') then Exit(True);
-  if FileExists(TargetDir + 'src' + DirectorySeparator + 'app.bv') then Exit(True);
-  if DirectoryExists(TargetDir + 'src' + DirectorySeparator + 'views') or
-     DirectoryExists(TargetDir + 'src' + DirectorySeparator + 'components') then Exit(True);
-
-  if FileExists(TargetDir + 'package.json') then
-  begin
-    PkgContent := LowerCase(ReadFileToString(TargetDir + 'package.json'));
-    if Pos('blaise', PkgContent) > 0 then Exit(True);
-  end;
-end;
-
 { Returns the path to the global registered projects database (~/.blaisevue/projects.json). }
 function GetProjectsConfigPath: string;
 var
@@ -20689,12 +22333,25 @@ begin
   Result := BaseDir + DirectorySeparator + 'projects.json';
 end;
 
+{ Saves the global project registry JSON document. }
+procedure SaveProjectsRegistry(RootObj: TJSONObject);
+var
+  ConfigFile, JsonStr: string;
+begin
+  ConfigFile := GetProjectsConfigPath;
+  JsonStr := RootObj.FormatJSON;
+  WriteStringToFile(ConfigFile, JsonStr);
+end;
+
 { Loads the global project registry JSON document. }
 function LoadProjectsRegistry(out RootObj: TJSONObject): Boolean;
 var
-  ConfigFile, Raw: string;
+  ConfigFile, Raw, PName, PPath: string;
   Parser: TJSONParser;
   Data: TJSONData;
+  ProjectsArr: TJSONArray;
+  i: Integer;
+  Modified: Boolean;
 begin
   Result := False;
   RootObj := nil;
@@ -20736,16 +22393,40 @@ begin
     RootObj.Add('projects', TJSONArray.Create);
     Result := True;
   end;
-end;
 
-{ Saves the global project registry JSON document. }
-procedure SaveProjectsRegistry(RootObj: TJSONObject);
-var
-  ConfigFile, JsonStr: string;
-begin
-  ConfigFile := GetProjectsConfigPath;
-  JsonStr := RootObj.FormatJSON;
-  WriteStringToFile(ConfigFile, JsonStr);
+  // Automatically filter and purge framework demo-app if present
+  if (RootObj <> nil) and (RootObj.Find('projects') <> nil) and (RootObj.Find('projects') is TJSONArray) then
+  begin
+    ProjectsArr := RootObj.Arrays['projects'];
+    Modified := False;
+    for i := ProjectsArr.Count - 1 downto 0 do
+    begin
+      if ProjectsArr[i] is TJSONObject then
+      begin
+        PName := LowerCase(GetJsonString(TJSONObject(ProjectsArr[i]), 'name', ''));
+        PPath := LowerCase(GetJsonString(TJSONObject(ProjectsArr[i]), 'path', ''));
+        if (PName = 'demo-app') or (PName = 'blaisevue-demo-app') or
+           (ExtractFileName(ExcludeTrailingPathDelimiter(PPath)) = 'demo-app') then
+        begin
+          ProjectsArr.Delete(i);
+          Modified := True;
+        end;
+      end;
+    end;
+
+    if (LowerCase(GetJsonString(RootObj, 'active', '')) = 'demo-app') or
+       (LowerCase(GetJsonString(RootObj, 'active', '')) = 'blaisevue-demo-app') then
+    begin
+      if ProjectsArr.Count > 0 then
+        RootObj.Strings['active'] := GetJsonString(TJSONObject(ProjectsArr[0]), 'name', '')
+      else
+        RootObj.Strings['active'] := '';
+      Modified := True;
+    end;
+
+    if Modified then
+      SaveProjectsRegistry(RootObj);
+  end;
 end;
 
 { Resolves the project name from a directory configuration or folder name. }
@@ -20872,7 +22553,20 @@ var
   CurDir, ProjName, ProjVer, NormCurDir, NormExisting: string;
   i, FoundIdx: Integer;
 begin
-  if not IsValidBlaiseVueProject then
+  if IsFrameworkCoreDemoApp then
+  begin
+    WriteLn('');
+    WriteLn('========================================================================');
+    WriteLn('  [ERROR] Cannot register the internal framework repository or demo-app.');
+    WriteLn('  Create and register your own standalone application with:');
+    WriteLn('    bv create <project-name>');
+    WriteLn('========================================================================');
+    WriteLn('');
+    Exit;
+  end;
+
+  CurDir := FindBlaiseVueProjectRoot('');
+  if CurDir = '' then
   begin
     WriteLn('');
     WriteLn('========================================================================');
@@ -20883,11 +22577,21 @@ begin
     WriteLn('');
     Exit;
   end;
-
-  CurDir := ExcludeTrailingPathDelimiter(GetCurrentDir);
   NormCurDir := LowerCase(CurDir);
   ProjName := GetProjectNameFromDir(CurDir);
   ProjVer := GetProjectVersionFromDir(CurDir);
+  if SameText(ProjName, 'demo-app') or SameText(ProjName, 'blaisevue-demo-app') then
+  begin
+    WriteLn('');
+    WriteLn('========================================================================');
+    WriteLn('  [ERROR] Cannot register the internal framework repository or demo-app.');
+    WriteLn('  Create and register your own standalone application with:');
+    WriteLn('    bv create <project-name>');
+    WriteLn('========================================================================');
+    WriteLn('');
+    Exit;
+  end;
+
   if not LoadProjectsRegistry(RootObj) then Exit;
   try
     ProjectsArr := RootObj.Arrays['projects'];
@@ -20946,7 +22650,7 @@ var
   ProjectsArr: TJSONArray;
   ProjData: TJSONData;
   ActiveName, PName, PPath, PVer, Marker: string;
-  i: Integer;
+  i, ValidCount: Integer;
 begin
   if not LoadProjectsRegistry(RootObj) then Exit;
   try
@@ -20955,34 +22659,38 @@ begin
     WriteLn('');
     WriteLn('  Registered BlaiseVue Projects:');
     WriteLn('  ' + StringOfChar('-', 76));
-    if ProjectsArr.Count = 0 then
+    ValidCount := 0;
+    for i := 0 to ProjectsArr.Count - 1 do
     begin
-      WriteLn('  No projects registered yet.');
-      WriteLn('  To register a project: navigate to its folder, run "bv enter" and "project add"');
-    end
-    else
-    begin
-      for i := 0 to ProjectsArr.Count - 1 do
+      ProjData := ProjectsArr[i];
+      if ProjData is TJSONObject then
       begin
-        ProjData := ProjectsArr[i];
-        if ProjData is TJSONObject then
-        begin
-          ProjObj := TJSONObject(ProjData);
-          PName := GetJsonString(ProjObj, 'name', 'unnamed');
-          PPath := GetJsonString(ProjObj, 'path', '');
-          PVer := GetJsonString(ProjObj, 'version', '1.0.0');
-          if SameText(PName, ActiveName) then
-            Marker := '* '
-          else
-            Marker := '  ';
+        ProjObj := TJSONObject(ProjData);
+        PName := GetJsonString(ProjObj, 'name', 'unnamed');
+        PPath := GetJsonString(ProjObj, 'path', '');
+        PVer := GetJsonString(ProjObj, 'version', '1.0.0');
+        if SameText(PName, 'demo-app') or SameText(PName, 'blaisevue-demo-app') or
+           SameText(ExtractFileName(ExcludeTrailingPathDelimiter(PPath)), 'demo-app') then
+          Continue;
 
-          WriteLn('  ', Marker, PadRight(PName, 20), PadRight('v' + PVer, 10), PPath);
-        end;
+        Inc(ValidCount);
+        if SameText(PName, ActiveName) then
+          Marker := '* '
+        else
+          Marker := '  ';
+
+        WriteLn('  ', Marker, PadRight(PName, 20), PadRight('v' + PVer, 10), PPath);
       end;
     end;
 
+    if ValidCount = 0 then
+    begin
+      WriteLn('  No user projects registered yet.');
+      WriteLn('  To register a project: navigate to its folder, run "bv enter" and "project add"');
+    end;
+
     WriteLn('  ' + StringOfChar('-', 76));
-    WriteLn('  Total: ', ProjectsArr.Count, ' project(s) registered (* active)');
+    WriteLn('  Total: ', ValidCount, ' project(s) registered (* active)');
     WriteLn('');
   finally
     RootObj.Free;
@@ -21794,67 +23502,868 @@ begin
 end;
 {$ENDIF}
 
-function CockpitReadLine(out S: string): Boolean;
+// =====================================================================
+//  BLAISEVUE COCKPIT: COMMAND TREE & AUTOCOMPLETION ENGINE (PHASE 1)
+// =====================================================================
+
+{ Returns the complete list of top-level commands supported by the Cockpit shell. }
+function GetCockpitMainCommands: TStringList;
+begin
+  Result := TStringList.Create;
+  Result.Sorted := True;
+  Result.Duplicates := dupIgnore;
+  // Scaffolding & Generators
+  Result.Add('g');
+  Result.Add('new');
+  Result.Add('generate');
+  Result.Add('remove');
+  Result.Add('list');
+  Result.Add('rename');
+  // Workspace & Project Cockpit
+  Result.Add('enter');
+  Result.Add('use');
+  Result.Add('project');
+  // Development & Frontend Build
+  Result.Add('dev');
+  Result.Add('build');
+  Result.Add('test');
+  Result.Add('preview');
+  Result.Add('ssg');
+  Result.Add('check');
+  Result.Add('clean');
+  Result.Add('wasm');
+  Result.Add('doc');
+  // Full-Stack Backend (mORMot 2)
+  Result.Add('mormot');
+  // Mobile (Capacitor)
+  Result.Add('mobile');
+  // Desktop (WebUI)
+  Result.Add('desktop');
+  // Package & Theme Management
+  Result.Add('lib');
+  Result.Add('theme');
+  Result.Add('repo');
+  Result.Add('extension');
+  // Project Configuration & Paths
+  Result.Add('path');
+  Result.Add('meta');
+  Result.Add('license');
+  Result.Add('reset');
+  // Diagnostics & Maintenance
+  Result.Add('doctor');
+  Result.Add('update');
+  Result.Add('upgrade');
+  Result.Add('self-update');
+  Result.Add('channel');
+  // Cockpit Builtins
+  Result.Add('help');
+  Result.Add('exit');
+  Result.Add('quit');
+  Result.Add('clear');
+  Result.Add('files');
+end;
+
+{ Returns all subcommands valid for a given parent command. }
+function GetCockpitSubcommands(const MainCmd: string): TStringList;
 var
-  ch: char;
-  len, avail: integer;
+  Cmd: string;
+begin
+  Result := TStringList.Create;
+  Result.Sorted := True;
+  Result.Duplicates := dupIgnore;
+  Cmd := LowerCase(MainCmd);
+
+  if Cmd = 'mormot' then
+  begin
+    Result.Add('run');
+    Result.Add('build');
+    Result.Add('crud');
+    Result.Add('auth');
+    Result.Add('docs');
+    Result.Add('swagger');
+    Result.Add('docker');
+    Result.Add('rpc');
+    Result.Add('status');
+    Result.Add('kill');
+    Result.Add('init');
+    Result.Add('deploy');
+  end
+  else if Cmd = 'mobile' then
+  begin
+    Result.Add('run');
+    Result.Add('build');
+    Result.Add('open');
+    Result.Add('sync');
+    Result.Add('init');
+    Result.Add('upgrade');
+    Result.Add('doctor');
+    Result.Add('kill');
+    Result.Add('remove');
+  end
+  else if Cmd = 'desktop' then
+  begin
+    Result.Add('run');
+    Result.Add('build');
+    Result.Add('init');
+    Result.Add('remove');
+  end
+  else if (Cmd = 'g') or (Cmd = 'new') or (Cmd = 'generate') or (Cmd = 'remove') then
+  begin
+    Result.Add('c');
+    Result.Add('v');
+    Result.Add('s');
+    Result.Add('t');
+    Result.Add('component');
+    Result.Add('view');
+    Result.Add('service');
+    Result.Add('test');
+  end
+  else if Cmd = 'list' then
+  begin
+    Result.Add('c');
+    Result.Add('v');
+    Result.Add('s');
+    Result.Add('t');
+    Result.Add('lib');
+  end
+  else if Cmd = 'rename' then
+  begin
+    Result.Add('c');
+    Result.Add('v');
+    Result.Add('s');
+    Result.Add('p');
+  end
+  else if Cmd = 'project' then
+  begin
+    Result.Add('list');
+    Result.Add('add');
+    Result.Add('current');
+    Result.Add('remove');
+  end
+  else if Cmd = 'theme' then
+  begin
+    Result.Add('list');
+    Result.Add('use');
+    Result.Add('add');
+    Result.Add('remove');
+    Result.Add('reset');
+  end
+  else if Cmd = 'lib' then
+  begin
+    Result.Add('list');
+    Result.Add('install');
+    Result.Add('remove');
+    Result.Add('search');
+    Result.Add('outdated');
+    Result.Add('pack');
+  end
+  else if Cmd = 'path' then
+  begin
+    Result.Add('list');
+    Result.Add('add');
+    Result.Add('remove');
+    Result.Add('available');
+  end
+  else if (Cmd = 'channel') or (Cmd = 'branch') then
+  begin
+    Result.Add('use');
+    Result.Add('main');
+    Result.Add('develop');
+  end
+  else if Cmd = 'meta' then
+  begin
+    Result.Add('show');
+    Result.Add('get');
+    Result.Add('set');
+    Result.Add('bump');
+    Result.Add('sync');
+  end
+  else if Cmd = 'license' then
+  begin
+    Result.Add('show');
+    Result.Add('list');
+    Result.Add('set');
+  end
+  else if Cmd = 'wasm' then
+  begin
+    Result.Add('info');
+    Result.Add('benchmark');
+  end;
+end;
+
+{ Returns formatted English subcommands guide and help overview for a parent command. }
+function GetCockpitSubcommandSummary(const MainCmd: string): string;
+var
+  Cmd: string;
+begin
+  Result := '';
+  Cmd := LowerCase(MainCmd);
+
+  if Cmd = 'mormot' then
+    Result :=
+      '  [HINT] Available subcommands for ''mormot'':' + LineEnding +
+      '   run [--release] [--fresh]   Starts native mORMot 2 backend server (Port 8090)' + LineEnding +
+      '   build [--release]          Compiles native server binary with Free Pascal' + LineEnding +
+      '   crud <Model>               Scaffolds full-stack ORM model, REST API & DataGrid' + LineEnding +
+      '   auth                       Scaffolds JWT authentication, login & route guards' + LineEnding +
+      '   docs | swagger             Interactive OpenAPI 3.0 & Swagger UI explorer' + LineEnding +
+      '   docker [--build]           Scaffolds sub-20MB Alpine micro-container' + LineEnding +
+      '   rpc                        Scaffolds type-safe Pascal RPC client proxies' + LineEnding +
+      '   status                     Queries running mORMot 2 health endpoint' + LineEnding +
+      '   kill                       Terminates lingering server instances' + LineEnding +
+      '   init                       Scaffolds mORMot 2 server structure in server/' + LineEnding +
+      '   deploy [--zip]             Assembles standalone production bundle in deploy/'
+  else if Cmd = 'mobile' then
+    Result :=
+      '  [HINT] Available subcommands for ''mobile'':' + LineEnding +
+      '   run android [--emulator]   Builds and launches app on Android emulator/device' + LineEnding +
+      '   build android              Compiles native Android Debug/Release APK or AAB' + LineEnding +
+      '   open android               Opens native Android project in Android Studio' + LineEnding +
+      '   sync                       Synchronizes dist/ web assets with native mobile/' + LineEnding +
+      '   init [name] [id]           Scaffolds Capacitor configuration and mobile runtime' + LineEnding +
+      '   upgrade [--check]          Migrates Capacitor dependencies & updates Gradle' + LineEnding +
+      '   doctor                     Validates Android SDK, JDK, ADB and emulators' + LineEnding +
+      '   kill                       Terminates lingering emulator & QEMU processes' + LineEnding +
+      '   remove [-y]                Safely deletes mobile/ and capacitor.config.json'
+  else if Cmd = 'desktop' then
+    Result :=
+      '  [HINT] Available subcommands for ''desktop'':' + LineEnding +
+      '   run                        Launches native desktop application window' + LineEnding +
+      '   build                      Compiles native desktop binary using Free Pascal' + LineEnding +
+      '   init                       Scaffolds WebUI desktop wrapper & Lazarus project' + LineEnding +
+      '   remove                     Safely deletes desktop/ scaffolding'
+  else if (Cmd = 'g') or (Cmd = 'new') or (Cmd = 'generate') then
+    Result :=
+      '  [HINT] Available subcommands for ''' + Cmd + ''' (generators):' + LineEnding +
+      '   c <Name>                   Scaffolds a component (.bv) & test in tests/components/' + LineEnding +
+      '   v <Name>                   Scaffolds a route view (.bv) & test in tests/views/' + LineEnding +
+      '   s <Name>                   Scaffolds a pure Pascal domain service in src/services/' + LineEnding +
+      '   t <Name>                   Scaffolds a Pascal test file (.test.pas)'
+  else if Cmd = 'remove' then
+    Result :=
+      '  [HINT] Available subcommands for ''remove'':' + LineEnding +
+      '   c <Name>                   Safely deletes a component and its unit test' + LineEnding +
+      '   v <Name>                   Safely deletes a view and its unit test' + LineEnding +
+      '   s <Name>                   Safely deletes a domain service from src/services/' + LineEnding +
+      '   t <Name>                   Safely deletes a test file'
+  else if Cmd = 'list' then
+    Result :=
+      '  [HINT] Available subcommands for ''list'':' + LineEnding +
+      '   c                          Lists all project components' + LineEnding +
+      '   v                          Lists all route views' + LineEnding +
+      '   s                          Lists all domain services' + LineEnding +
+      '   t                          Lists all test files' + LineEnding +
+      '   lib                        Lists all installed packages'
+  else if Cmd = 'rename' then
+    Result :=
+      '  [HINT] Available subcommands for ''rename'':' + LineEnding +
+      '   c <Old> <New>              Smart renames a component and updates references' + LineEnding +
+      '   v <Old> <New>              Smart renames a route view and updates router' + LineEnding +
+      '   s <Old> <New>              Smart renames a domain service' + LineEnding +
+      '   p <NewName>                Renames the entire project and syncs Lazarus/Capacitor'
+  else if Cmd = 'project' then
+    Result :=
+      '  [HINT] Available subcommands for ''project'':' + LineEnding +
+      '   list                       Lists registered projects (* active)' + LineEnding +
+      '   add                        Registers current project into global registry' + LineEnding +
+      '   current                    Shows active project details' + LineEnding +
+      '   remove <name>              Unregisters a project from global registry'
+  else if Cmd = 'theme' then
+    Result :=
+      '  [HINT] Available subcommands for ''theme'':' + LineEnding +
+      '   list                       Displays active and available themes in @blaise-themes' + LineEnding +
+      '   use <name>                 Sets active default theme in package.json & index.html' + LineEnding +
+      '   add <name>                 Adds a theme to package.json for optimized bundling' + LineEnding +
+      '   remove <name>              Removes a theme from package.json' + LineEnding +
+      '   reset                      Resets theme filters (bundles all themes in compatibility mode)'
+  else if Cmd = 'lib' then
+    Result :=
+      '  [HINT] Available subcommands for ''lib'':' + LineEnding +
+      '   list [--global|-g]         Lists installed libraries' + LineEnding +
+      '   install <name>             Downloads and installs a package into lib/' + LineEnding +
+      '   remove <name>              Safely uninstalls a package from lib/' + LineEnding +
+      '   search <term>              Searches packages in registered repositories' + LineEnding +
+      '   outdated [--global|-g]     Checks for available updates in installed packages' + LineEnding +
+      '   pack [dir]                 Assembles & verifies release artifact (.zip with SHA-256)'
+  else if Cmd = 'path' then
+    Result :=
+      '  [HINT] Available subcommands for ''path'':' + LineEnding +
+      '   list                       Lists all active unit search paths (-Fu) in app.cfg' + LineEnding +
+      '   add <dir|pas2js:p>         Adds a folder or official Pas2JS package to app.cfg' + LineEnding +
+      '   remove <target>            Removes a search path or Pas2JS package from app.cfg' + LineEnding +
+      '   available                  Lists all built-in Pas2JS packages available to link'
+  else if (Cmd = 'channel') or (Cmd = 'branch') then
+    Result :=
+      '  [HINT] Available subcommands for ''channel'':' + LineEnding +
+      '   use <main|develop>         Switches framework Git branch' + LineEnding +
+      '   main                       Switches to official stable release channel' + LineEnding +
+      '   develop                    Switches to bleeding-edge development channel'
+  else if Cmd = 'meta' then
+    Result :=
+      '  [HINT] Available subcommands for ''meta'':' + LineEnding +
+      '   show                       Displays project version, author, and description' + LineEnding +
+      '   bump <patch|minor|major>   Increments SemVer and synchronizes monorepo' + LineEnding +
+      '   sync                       Synchronizes version across all package files' + LineEnding +
+      '   set <field> <val>          Sets metadata field in package.json'
+  else if Cmd = 'license' then
+    Result :=
+      '  [HINT] Available subcommands for ''license'':' + LineEnding +
+      '   show                       Displays active project license and text' + LineEnding +
+      '   list                       Lists supported open-source licenses (MIT, Apache, etc.)' + LineEnding +
+      '   set <id>                   Applies a standard license to the project'
+  else if Cmd = 'wasm' then
+    Result :=
+      '  [HINT] Available subcommands for ''wasm'':' + LineEnding +
+      '   info                       Displays WebAssembly compiler runtime & memory status' + LineEnding +
+      '   benchmark                  Executes Wasm vs JS reactive performance benchmark';
+end;
+
+{ Finds the closest valid Cockpit command using Levenshtein distance and prefix matching. }
+function FindClosestCockpitCommand(const WrongCmd: string; out Suggestion: string): Boolean;
+var
+  MainCmds: TStringList;
+  i, Dist, MinDist: Integer;
+  Candidate, LowerWrong: string;
+begin
+  Result := False;
+  Suggestion := '';
+  LowerWrong := LowerCase(Trim(WrongCmd));
+  if LowerWrong = '' then Exit;
+
+  MainCmds := GetCockpitMainCommands;
+  try
+    MinDist := 999;
+    for i := 0 to MainCmds.Count - 1 do
+    begin
+      Candidate := MainCmds[i];
+      // Check prefix match first (e.g. "morm" -> "mormot")
+      if (Length(LowerWrong) >= 3) and (Pos(LowerWrong, Candidate) = 1) then
+      begin
+        Suggestion := Candidate;
+        Result := True;
+        Exit;
+      end;
+
+      Dist := LevenshteinDistance(LowerWrong, Candidate);
+      if (Dist <= 2) and (Dist < MinDist) then
+      begin
+        MinDist := Dist;
+        Suggestion := Candidate;
+        Result := True;
+      end;
+    end;
+  finally
+    MainCmds.Free;
+  end;
+end;
+
+{ Finds the closest valid subcommand using Levenshtein distance and prefix matching. }
+function FindClosestSubcommand(const MainCmd, WrongSub: string; out Suggestion: string): Boolean;
+var
+  SubList: TStringList;
+  i, Dist, MinDist: Integer;
+  Candidate, LowerWrong: string;
+begin
+  Result := False;
+  Suggestion := '';
+  LowerWrong := LowerCase(Trim(WrongSub));
+  if LowerWrong = '' then Exit;
+
+  SubList := GetCockpitSubcommands(MainCmd);
+  try
+    MinDist := 999;
+    for i := 0 to SubList.Count - 1 do
+    begin
+      Candidate := SubList[i];
+      if (Length(LowerWrong) >= 2) and (Pos(LowerWrong, Candidate) = 1) then
+      begin
+        Suggestion := Candidate;
+        Result := True;
+        Exit;
+      end;
+
+      Dist := LevenshteinDistance(LowerWrong, Candidate);
+      if (Dist <= 2) and (Dist < MinDist) then
+      begin
+        MinDist := Dist;
+        Suggestion := Candidate;
+        Result := True;
+      end;
+    end;
+  finally
+    SubList.Free;
+  end;
+end;
+
+{ Resolves autocompletion candidates for a given input buffer.
+  Returns True if completions are available.
+  If SingleMatch is found, FullMatch contains the completed string.
+  If multiple matches exist, Candidates contains the options. }
+function GetCockpitCompletions(const InputBuf: string; out FullMatch: string; out Candidates: TStringList): Boolean;
+var
+  Tokens, MainCmds, SubCmds: TStringList;
+  MainCmd, SubToken, Candidate: string;
+  HasTrailingSpace: Boolean;
+  i: Integer;
+begin
+  Result := False;
+  FullMatch := '';
+  Candidates := TStringList.Create;
+  Candidates.Sorted := True;
+  Candidates.Duplicates := dupIgnore;
+
+  HasTrailingSpace := (Length(InputBuf) > 0) and (InputBuf[Length(InputBuf)] = ' ');
+  Tokens := TStringList.Create;
+  try
+    SplitTokens(InputBuf, Tokens);
+
+    // Case 1: Empty input -> return all main commands
+    if Tokens.Count = 0 then
+    begin
+      MainCmds := GetCockpitMainCommands;
+      try
+        Candidates.Assign(MainCmds);
+      finally
+        MainCmds.Free;
+      end;
+      Result := Candidates.Count > 0;
+      Exit;
+    end;
+
+    // Case 2: Exactly 1 token and NO trailing space -> complete main command
+    if (Tokens.Count = 1) and (not HasTrailingSpace) then
+    begin
+      MainCmd := LowerCase(Tokens[0]);
+      MainCmds := GetCockpitMainCommands;
+      try
+        for i := 0 to MainCmds.Count - 1 do
+        begin
+          Candidate := MainCmds[i];
+          if Pos(MainCmd, Candidate) = 1 then
+            Candidates.Add(Candidate);
+        end;
+      finally
+        MainCmds.Free;
+      end;
+
+      if Candidates.Count = 1 then
+        FullMatch := Candidates[0] + ' ';
+      Result := Candidates.Count > 0;
+      Exit;
+    end;
+
+    // Case 3: Main command entered + trailing space or subtoken -> complete subcommands
+    MainCmd := LowerCase(Tokens[0]);
+    SubCmds := GetCockpitSubcommands(MainCmd);
+    try
+      if SubCmds.Count = 0 then Exit; // Main command has no subcommands
+
+      if HasTrailingSpace and (Tokens.Count = 1) then
+      begin
+        // User typed "mormot " -> list all subcommands
+        Candidates.Assign(SubCmds);
+      end
+      else if Tokens.Count >= 2 then
+      begin
+        // User typed "mormot r" -> filter subcommands starting with "r"
+        SubToken := LowerCase(Tokens[1]);
+        for i := 0 to SubCmds.Count - 1 do
+        begin
+          Candidate := SubCmds[i];
+          if Pos(SubToken, Candidate) = 1 then
+            Candidates.Add(Candidate);
+        end;
+        if Candidates.Count = 1 then
+          FullMatch := Tokens[0] + ' ' + Candidates[0] + ' ';
+      end;
+    finally
+      SubCmds.Free;
+    end;
+
+    Result := Candidates.Count > 0;
+  finally
+    Tokens.Free;
+  end;
+end;
+
+var
+  CockpitHistory: TStringList = nil;
+
+{$IFDEF WINDOWS}
+function CockpitReadInteractive(const Prompt: string; out S: string): Boolean;
+var
+  hIn: THandle;
+  Mode, OldMode: DWORD;
+  IR: INPUT_RECORD;
+  Count: DWORD;
+  Buf, FullMatch: string;
+  Candidates: TStringList;
+  VK: Word;
+  Ch: AnsiChar;
+  i, HistIdx, ColWidth, ItemsPerLine: Integer;
 begin
   S := '';
+  Buf := '';
   Result := False;
-  {$IFDEF WINDOWS}
-  try
-    ReadLn(S);
-    Result := True;
-  except
-    Result := False;
-  end;
-  {$ELSE}
-  while True do
+  if Prompt <> '' then
   begin
-    ch := #0;
-    len := fpRead(0, ch, 1);
-    if (len < 0) and (fpGetErrno = ESysEINTR) then
-      Continue;
-    if len <= 0 then
-    begin
-      if S <> '' then Result := True;
-      Exit;
-    end;
-    if ch = #10 then
-    begin
-      Result := True;
-      Exit;
-    end
-    else if ch = #13 then
-    begin
-      avail := 0;
-      if (fpIOCtl(0, FIONREAD, @avail) >= 0) and (avail > 0) then
-      begin
-        fpRead(0, ch, 1);
-        if ch <> #10 then
-          S := S + ch;
-      end;
-      Result := True;
-      Exit;
-    end
-    else if (ch = #8) or (ch = #127) then
-    begin
-      if Length(S) > 0 then
-        SetLength(S, Length(S) - 1);
-    end
-    else if (ch >= ' ') or (ch = #9) then
-    begin
-      S := S + ch;
-    end;
+    Write(Prompt);
+    Flush(Output);
   end;
-  {$ENDIF}
+
+  hIn := GetStdHandle(STD_INPUT_HANDLE);
+  if (hIn = 0) or (hIn = INVALID_HANDLE_VALUE) or (not GetConsoleMode(hIn, OldMode)) then
+  begin
+    // Fallback if redirected or non-interactive pipe
+    if Eof then Exit(False);
+    try
+      ReadLn(S);
+      Result := True;
+    except
+      Result := False;
+    end;
+    Exit;
+  end;
+
+  // Disable line buffering and automatic echo to intercept Tab, Arrows, etc.
+  Mode := OldMode and (not (ENABLE_LINE_INPUT or ENABLE_ECHO_INPUT));
+  SetConsoleMode(hIn, Mode);
+  try
+    if CockpitHistory = nil then
+    begin
+      CockpitHistory := TStringList.Create;
+      CockpitHistory.Duplicates := dupIgnore;
+    end;
+    HistIdx := CockpitHistory.Count;
+
+    while True do
+    begin
+      Count := 0;
+      if not ReadConsoleInput(hIn, IR, 1, Count) then Break;
+      if (Count = 1) and (IR.EventType = KEY_EVENT) and (IR.Event.KeyEvent.bKeyDown) then
+      begin
+        VK := IR.Event.KeyEvent.wVirtualKeyCode;
+        Ch := IR.Event.KeyEvent.AsciiChar;
+
+        // Enter
+        if (VK = VK_RETURN) or (Ch = #13) or (Ch = #10) then
+        begin
+          WriteLn('');
+          S := Trim(Buf);
+          if S <> '' then
+          begin
+            if (CockpitHistory.Count = 0) or (CockpitHistory[CockpitHistory.Count - 1] <> S) then
+              CockpitHistory.Add(S);
+          end;
+          Result := True;
+          Break;
+        end
+
+        // Tab Autocompletion
+        else if (VK = VK_TAB) or (Ch = #9) then
+        begin
+          if GetCockpitCompletions(Buf, FullMatch, Candidates) then
+          begin
+            try
+              if FullMatch <> '' then
+              begin
+                // Single unique completion
+                Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt + FullMatch);
+                Flush(Output);
+                Buf := FullMatch;
+              end
+              else if Candidates.Count > 1 then
+              begin
+                // Multiple completions -> display formatted grid
+                WriteLn('');
+                ColWidth := 16;
+                ItemsPerLine := 4;
+                for i := 0 to Candidates.Count - 1 do
+                begin
+                  if (i mod ItemsPerLine = 0) then
+                    Write('  ');
+                  Write(PadRight(Candidates[i], ColWidth));
+                  if (i mod ItemsPerLine = ItemsPerLine - 1) or (i = Candidates.Count - 1) then
+                    WriteLn('');
+                end;
+                Write(Prompt + Buf);
+                Flush(Output);
+              end;
+            finally
+              Candidates.Free;
+            end;
+          end;
+        end
+
+        // Up Arrow (Navigate history backwards)
+        else if VK = VK_UP then
+        begin
+          if (CockpitHistory.Count > 0) and (HistIdx > 0) then
+          begin
+            Dec(HistIdx);
+            Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt + CockpitHistory[HistIdx]);
+            Flush(Output);
+            Buf := CockpitHistory[HistIdx];
+          end;
+        end
+
+        // Down Arrow (Navigate history forwards)
+        else if VK = VK_DOWN then
+        begin
+          if HistIdx < CockpitHistory.Count - 1 then
+          begin
+            Inc(HistIdx);
+            Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt + CockpitHistory[HistIdx]);
+            Flush(Output);
+            Buf := CockpitHistory[HistIdx];
+          end
+          else if HistIdx = CockpitHistory.Count - 1 then
+          begin
+            HistIdx := CockpitHistory.Count;
+            Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt);
+            Flush(Output);
+            Buf := '';
+          end;
+        end
+
+        // Backspace
+        else if (VK = VK_BACK) or (Ch = #8) then
+        begin
+          if Length(Buf) > 0 then
+          begin
+            SetLength(Buf, Length(Buf) - 1);
+            Write(#8' '#8);
+            Flush(Output);
+          end;
+        end
+
+        // Escape (clear line)
+        else if VK = VK_ESCAPE then
+        begin
+          Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt);
+          Flush(Output);
+          Buf := '';
+          HistIdx := CockpitHistory.Count;
+        end
+
+        // Ctrl+C (Interrupt line)
+        else if (Ch = #3) or ((VK = Ord('C')) and ((IR.Event.KeyEvent.dwControlKeyState and (LEFT_CTRL_PRESSED or RIGHT_CTRL_PRESSED)) <> 0)) then
+        begin
+          WriteLn('^C');
+          Write(Prompt);
+          Flush(Output);
+          Buf := '';
+          HistIdx := CockpitHistory.Count;
+        end
+
+        // Standard Printable Characters
+        else if (Ch >= ' ') and (Ch <= #126) then
+        begin
+          Buf := Buf + Ch;
+          Write(Ch);
+          Flush(Output);
+        end;
+      end;
+    end;
+  finally
+    SetConsoleMode(hIn, OldMode);
+  end;
+end;
+{$ENDIF}
+
+{$IFDEF UNIX}
+function CockpitReadInteractive(const Prompt: string; out S: string): Boolean;
+var
+  OldTerm, NewTerm: TermIOS;
+  Ch, NextCh, DirCh: Char;
+  Buf, FullMatch: string;
+  Candidates: TStringList;
+  HistIdx, i, ColWidth, ItemsPerLine: Integer;
+begin
+  S := '';
+  Buf := '';
+  Result := False;
+  if Prompt <> '' then
+  begin
+    Write(Prompt);
+    Flush(Output);
+  end;
+
+  if isatty(0) = 0 then
+  begin
+    // Fallback if redirected or non-interactive pipe
+    if Eof then Exit(False);
+    try
+      ReadLn(S);
+      Result := True;
+    except
+      Result := False;
+    end;
+    Exit;
+  end;
+
+  TCGetAttr(0, OldTerm);
+  NewTerm := OldTerm;
+  NewTerm.c_lflag := NewTerm.c_lflag and (not (ICANON or ECHO));
+  NewTerm.c_cc[VMIN] := 1;
+  NewTerm.c_cc[VTIME] := 0;
+  TCSetAttr(0, TCSANOW, NewTerm);
+  try
+    if CockpitHistory = nil then
+    begin
+      CockpitHistory := TStringList.Create;
+      CockpitHistory.Duplicates := dupIgnore;
+    end;
+    HistIdx := CockpitHistory.Count;
+
+    while True do
+    begin
+      Ch := #0;
+      if fpRead(0, Ch, 1) <= 0 then Break;
+
+      // Enter
+      if (Ch = #10) or (Ch = #13) then
+      begin
+        WriteLn('');
+        S := Trim(Buf);
+        if S <> '' then
+        begin
+          if (CockpitHistory.Count = 0) or (CockpitHistory[CockpitHistory.Count - 1] <> S) then
+            CockpitHistory.Add(S);
+        end;
+        Result := True;
+        Break;
+      end
+
+      // Tab Autocompletion
+      else if Ch = #9 then
+      begin
+        if GetCockpitCompletions(Buf, FullMatch, Candidates) then
+        begin
+          try
+            if FullMatch <> '' then
+            begin
+              Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt + FullMatch);
+              Flush(Output);
+              Buf := FullMatch;
+            end
+            else if Candidates.Count > 1 then
+            begin
+              WriteLn('');
+              ColWidth := 16;
+              ItemsPerLine := 4;
+              for i := 0 to Candidates.Count - 1 do
+              begin
+                if (i mod ItemsPerLine = 0) then
+                  Write('  ');
+                Write(PadRight(Candidates[i], ColWidth));
+                if (i mod ItemsPerLine = ItemsPerLine - 1) or (i = Candidates.Count - 1) then
+                  WriteLn('');
+              end;
+              Write(Prompt + Buf);
+              Flush(Output);
+            end;
+          finally
+            Candidates.Free;
+          end;
+        end;
+      end
+
+      // Backspace
+      else if (Ch = #127) or (Ch = #8) then
+      begin
+        if Length(Buf) > 0 then
+        begin
+          SetLength(Buf, Length(Buf) - 1);
+          Write(#8' '#8);
+          Flush(Output);
+        end;
+      end
+
+      // ANSI Escape Sequences (Arrow Keys)
+      else if Ch = #27 then
+      begin
+        NextCh := #0;
+        if fpRead(0, NextCh, 1) > 0 then
+        begin
+          if NextCh = '[' then
+          begin
+            DirCh := #0;
+            if fpRead(0, DirCh, 1) > 0 then
+            begin
+              // Up Arrow: ESC [ A
+              if DirCh = 'A' then
+              begin
+                if (CockpitHistory.Count > 0) and (HistIdx > 0) then
+                begin
+                  Dec(HistIdx);
+                  Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt + CockpitHistory[HistIdx]);
+                  Flush(Output);
+                  Buf := CockpitHistory[HistIdx];
+                end;
+              end
+              // Down Arrow: ESC [ B
+              else if DirCh = 'B' then
+              begin
+                if HistIdx < CockpitHistory.Count - 1 then
+                begin
+                  Inc(HistIdx);
+                  Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt + CockpitHistory[HistIdx]);
+                  Flush(Output);
+                  Buf := CockpitHistory[HistIdx];
+                end
+                else if HistIdx = CockpitHistory.Count - 1 then
+                begin
+                  HistIdx := CockpitHistory.Count;
+                  Write(#13 + Prompt + StringOfChar(' ', Length(Buf)) + #13 + Prompt);
+                  Flush(Output);
+                  Buf := '';
+                end;
+              end;
+            end;
+          end;
+        end;
+      end
+
+      // Ctrl+C
+      else if Ch = #3 then
+      begin
+        WriteLn('^C');
+        Write(Prompt);
+        Flush(Output);
+        Buf := '';
+        HistIdx := CockpitHistory.Count;
+      end
+
+      // Standard Printable Characters
+      else if Ch >= ' ' then
+      begin
+        Buf := Buf + Ch;
+        Write(Ch);
+        Flush(Output);
+      end;
+    end;
+  finally
+    TCSetAttr(0, TCSANOW, OldTerm);
+  end;
+end;
+{$ENDIF}
+
+function CockpitReadLine(const Prompt: string; out S: string): Boolean;
+begin
+  Result := CockpitReadInteractive(Prompt, S);
+end;
+
+function CockpitReadLine(out S: string): Boolean;
+begin
+  Result := CockpitReadInteractive('', S);
 end;
 
 procedure RunCockpitShell(const InitialName, InitialPath: string);
 var
   ActiveName, ActivePath, InputLine, CmdName, DummyName: string;
-  Tokens: TStringList;
-  FoundPath, FoundVer: string;
+  Tokens, SubCmdList: TStringList;
+  FoundPath, FoundVer, SummaryHelp, Suggestion, SubSuggestion, RestOfLine: string;
   i: Integer;
   BvExePath: string;
   {$IFDEF UNIX}
@@ -21886,9 +24395,7 @@ begin
     while True do
     begin
       InputLine := '';
-      Write('[bv: ' + ActiveName + '] > ');
-      Flush(Output);
-      if not CockpitReadLine(InputLine) then
+      if not CockpitReadLine('[bv: ' + ActiveName + '] > ', InputLine) then
       begin
         WriteLn('');
         Break;
@@ -21912,6 +24419,44 @@ begin
 
       CmdName := LowerCase(Tokens[0]);
 
+      // Phase 3: Subcommand Helper for incomplete parent commands
+      if (Tokens.Count = 1) and (CmdName <> 'exit') and (CmdName <> 'quit') and (CmdName <> 'q') and
+         (CmdName <> 'clear') and (CmdName <> 'files') and (CmdName <> 'enter') and (CmdName <> 'help') and
+         (CmdName <> 'dev') and (CmdName <> 'build') and (CmdName <> 'preview') and (CmdName <> 'test') and
+         (CmdName <> 'clean') and (CmdName <> 'check') and (CmdName <> 'ssg') and (CmdName <> 'doctor') and
+         (CmdName <> 'self-update') and (CmdName <> 'reset') and (CmdName <> 'update') and (CmdName <> 'upgrade') then
+      begin
+        SummaryHelp := GetCockpitSubcommandSummary(CmdName);
+        if SummaryHelp <> '' then
+        begin
+          WriteLn('');
+          WriteLn(SummaryHelp);
+          WriteLn('');
+          Continue;
+        end;
+      end;
+
+      // Phase 4: Subcommand typo detection (e.g. "mormot buid")
+      if (Tokens.Count >= 2) and (Copy(Tokens[1], 1, 1) <> '-') then
+      begin
+        SubCmdList := GetCockpitSubcommands(CmdName);
+        try
+          if (SubCmdList.Count > 0) and (SubCmdList.IndexOf(LowerCase(Tokens[1])) < 0) then
+          begin
+            if FindClosestSubcommand(CmdName, Tokens[1], SubSuggestion) then
+            begin
+              WriteLn('');
+              WriteLn('  [?] Unrecognized subcommand: ''' + Tokens[1] + ''' for ''' + CmdName + '''');
+              WriteLn('   Did you mean: ''' + CmdName + ' ' + SubSuggestion + '''?');
+              WriteLn('');
+              Continue;
+            end;
+          end;
+        finally
+          SubCmdList.Free;
+        end;
+      end;
+
       // Exit / Quit
       if (CmdName = 'exit') or (CmdName = 'quit') or (CmdName = 'q') then
       begin
@@ -21920,9 +24465,22 @@ begin
       end
 
       // Clear screen
-      else if (CmdName = 'cls') or (CmdName = 'clear') then
+      else if CmdName = 'clear' then
       begin
-        for i := 1 to 40 do WriteLn('');
+        ClearScreen(True, ActiveName, ActivePath);
+      end
+
+      // Project files tree
+      else if CmdName = 'files' then
+      begin
+        if (Tokens.Count >= 2) and ((LowerCase(Tokens[1]) = '--all') or (LowerCase(Tokens[1]) = '-a')) then
+          CmdFiles('', True)
+        else if (Tokens.Count >= 3) and ((LowerCase(Tokens[2]) = '--all') or (LowerCase(Tokens[2]) = '-a')) then
+          CmdFiles(Tokens[1], True)
+        else if Tokens.Count >= 2 then
+          CmdFiles(Tokens[1], False)
+        else
+          CmdFiles('', False);
       end
 
       // Enter (already inside)
@@ -21937,61 +24495,113 @@ begin
       else if (CmdName = 'help') or (CmdName = '?') or (CmdName = '--help') or (CmdName = '-h') then
       begin
         WriteLn('');
-        WriteLn('  BlaiseVue Interactive Cockpit Commands:');
-        WriteLn('  =============================================================');
-        WriteLn('  Project & Session:');
-        WriteLn('    project add                Registers current project into global registry');
-        WriteLn('    project list               Lists registered projects (* active)');
-        WriteLn('    project current            Shows active project details');
-        WriteLn('    project remove <name>      Unregisters a project');
-        WriteLn('    use <name>                 Switches active project context immediately');
-        WriteLn('    rename project <NewName>   Renames project, syncs package.json & prompt');
-        WriteLn('    update [--dry-run]         Updates project infrastructure non-destructively');
-        WriteLn('    doctor                     Diagnoses environment tools (Git, Lazarus, FPC, etc.)');
-        WriteLn('    self-update [--check] [--force] Updates BlaiseVue framework directly from GitHub');
-        WriteLn('    channel [use <name>]       Inspects or switches framework branch (main/develop)');
+        WriteLn('  BlaiseVue Interactive Cockpit v' + GetCliVersion + ' (Active Project: ' + ActiveName + ')');
+        WriteLn('  ============================================================');
+        WriteLn('  Type any command directly without repeating "bv". Use [TAB] for autocomplete.');
         WriteLn('');
-        WriteLn('  Backend & Full-Stack (mORMot 2):');
-        WriteLn('    mormot run [--release]     Launches native backend server');
-        WriteLn('    mormot build [--release]   Compiles native server with Free Pascal');
-        WriteLn('    mormot status              Checks backend health & metrics');
-        WriteLn('    mormot crud <Model> [fields] Scaffolds full-stack CRUD & data grid');
-        WriteLn('    mormot docs / docker       Swagger API docs / Docker containers');
+        WriteLn('  # === Scaffolding & Generators ===');
+        WriteLn('  g c <Name>                 Scaffolds a component (.bv) & test in tests/components/ (alias: new c)');
+        WriteLn('  g v <Name>                 Scaffolds a route view (.bv) & test in tests/views/ (alias: new v)');
+        WriteLn('  g s <Name>                 Scaffolds a pure Pascal domain service in src/services/ (alias: new s)');
+        WriteLn('  g t <Name>                 Scaffolds a Pascal test file (.test.pas) (alias: new t)');
+        WriteLn('  remove <c|v|s|t> <Name>    Safely deletes a component, view, service, or test');
+        WriteLn('  list <c|v|s|t|lib>         Lists project components, views, services, tests, or installed libs');
+        WriteLn('  rename <c|v|s|p>           Smart rename for services, components, views, or project name');
         WriteLn('');
-        WriteLn('  Frontend & Development:');
-        WriteLn('    dev / serve                Starts dev server with HMR on http://localhost:8080');
-        WriteLn('    build                      Production build in dist/');
-        WriteLn('    run <build|dev|preview>    Unified build and run commands');
-        WriteLn('    check [file]               AST template type-checker & validator');
-        WriteLn('    clean                      Purges generated/ and dist/ folders');
+        WriteLn('  # === Workspace & Project Cockpit ===');
+        WriteLn('  files [path] [--all]       Displays structured project files tree');
+        WriteLn('  clear                      Clears terminal screen & refreshes header');
+        WriteLn('  use <project-name>         Switches active project context immediately');
+        WriteLn('  project add                Registers current project into global registry');
+        WriteLn('  project list               Lists registered projects (* active)');
+        WriteLn('  project current            Shows active project details');
+        WriteLn('  project remove <name>      Unregisters a project from global registry');
         WriteLn('');
-        WriteLn('  Code Scaffolding (alias: g / generate):');
-        WriteLn('    g s <Name> [--no-test]     Creates a new pure Pascal domain service (alias: new s)');
-        WriteLn('    g c <Name> [--no-test]     Creates a new component (.bv) (alias: new c)');
-        WriteLn('    g v <Name> [--no-test]     Creates a new view (.bv) (alias: new v)');
-        WriteLn('    g t <Name>                 Creates a new test file (alias: new t)');
-        WriteLn('    remove <c|v|s|t> <Name>    Deletes element and unit tests safely');
-        WriteLn('    list <c|v|s|t|lib>         Lists components, views, services, or tests');
-        WriteLn('    rename <c|v|s> <Old> <New> Renames service, component, or view across codebase');
+        WriteLn('  # === Development & Frontend Build ===');
+        WriteLn('  dev                        Builds project in dev mode & starts dev server on http://localhost:8080');
+        WriteLn('  build                      Compiles frontend in development/debug mode (Lazarus & watchers)');
+        WriteLn('  build --release            Builds optimized production bundle with hashes in dist/');
+        WriteLn('  preview                    Local HTTP preview of production build (port 5000)');
+        WriteLn('  ssg                        Pre-renders all routes into static HTML (SSG)');
+        WriteLn('  wasm <info|benchmark>      WebAssembly acceleration and performance benchmarks');
+        WriteLn('  check [file]               Validates component templates against script declarations');
+        WriteLn('  clean                      Cleans generated build files (generated/ and dist/)');
         WriteLn('');
-        WriteLn('  Testing & Cross-Platform:');
-        WriteLn('    test [e2e]                 Runs Pas2JS + Vitest test suite');
-        WriteLn('    mobile <run|build|sync>    Native Android & iOS via Capacitor');
-        WriteLn('    desktop <run|build|sync>   Native desktop app via Lazarus & WebUI');
-        WriteLn('    studio                     Launches BlaiseVue Studio developer cockpit');
-        WriteLn('    theme <list|use <name>>    Inspects or changes project UI theme');
+        WriteLn('  # === Backend & Full-Stack (Synopse mORMot 2) ===');
+        WriteLn('  mormot init                Scaffolds mORMot 2 backend server in server/');
+        WriteLn('  mormot run [--release] [--fresh] [--port <p>] Starts native backend server');
+        WriteLn('  mormot build [--release]   Compiles native server binary with Free Pascal');
+        WriteLn('  mormot kill [--port <p>]   Gracefully terminates server.exe & verifies port release');
+        WriteLn('  mormot status              Queries running mORMot 2 health endpoint (/api/status)');
+        WriteLn('  mormot deploy [--zip]      Assembles standalone production bundle in deploy/');
+        WriteLn('  mormot crud <Model>        Scaffolds full-stack ORM model, REST API & reactive DataGrid');
+        WriteLn('  mormot auth                Scaffolds JWT authentication, AuthService, LoginView & route guards');
+        WriteLn('  mormot docs | swagger      Generates interactive OpenAPI 3.0 & Swagger UI explorer');
+        WriteLn('  mormot docker [--build]    Scaffolds sub-20MB Alpine micro-container & docker-compose.yml');
+        WriteLn('  mormot rpc                 Scaffolds type-safe Pascal RPC client proxies from SOA interfaces');
         WriteLn('');
-        WriteLn('  Compiler Paths & Legacy Units:');
-        WriteLn('    path [list]                Lists active search paths in app.cfg');
-        WriteLn('    path add <dir|pas2js:p>    Links a folder or official Pas2JS package');
-        WriteLn('    path remove <target>       Removes a search path from app.cfg');
-        WriteLn('    path available             Lists all available built-in Pas2JS packages');
+        WriteLn('  # === Mobile (Android & iOS via Capacitor) ===');
+        WriteLn('  mobile init [name] [id]    Scaffolds Capacitor & mobile/ native project');
+        WriteLn('  mobile upgrade [--check]   Migrates Capacitor dependencies & updates Gradle');
+        WriteLn('  mobile sync                Syncs dist/ with native mobile assets');
+        WriteLn('  mobile remove [-y]         Safely deletes mobile/ and capacitor.config.json');
+        WriteLn('  mobile build android       Builds native Android Debug/Release APK in mobile/bin/android/');
+        WriteLn('  mobile emulator list       Lists installed Android Virtual Devices (AVD)');
+        WriteLn('  mobile emulator start      Boots Android emulator in background');
+        WriteLn('  mobile emulator kill       Terminates lingering emulator & QEMU processes');
+        WriteLn('  mobile run android         Installs and launches APK on connected USB device');
+        WriteLn('  mobile run android [--emulator] [--release] [--fresh] Compiles, deploys and launches app');
+        WriteLn('  mobile open android        Opens project in Android Studio');
         WriteLn('');
-        WriteLn('  Shell Passthrough:');
-        WriteLn('    cls / clear                Clears terminal screen');
-        WriteLn('    exit / quit / q            Exits the cockpit shell');
-        WriteLn('    <shell command>            Runs any system command (git, npm, dir, etc.)');
-        WriteLn('  =============================================================');
+        WriteLn('  # === Desktop (Free Pascal, Lazarus IDE & WebUI) ===');
+        WriteLn('  desktop init [name]        Scaffolds Lazarus (.lpi, .lpr) & WebUI project');
+        WriteLn('  desktop sync               Syncs dist/ with desktop/assets/');
+        WriteLn('  desktop remove [-y]        Safely deletes desktop/ native project');
+        WriteLn('  desktop build [target]     Compiles Debug/Release native binary');
+        WriteLn('  desktop run [target]       Launches desktop app in Debug or Release mode');
+        WriteLn('');
+        WriteLn('  # === Testing & Docs ===');
+        WriteLn('  test                       Compiles and runs all unit tests (.test.pas) with Vitest');
+        WriteLn('  test e2e                   Runs headless browser End-to-End integration test suite');
+        WriteLn('  doc [--serve]              Generates interactive component documentation & playground');
+        WriteLn('  studio                     Launches BlaiseVue Studio developer dashboard (port 9000)');
+        WriteLn('');
+        WriteLn('  # === Package & Theme Management ===');
+        WriteLn('  repo <list|add|remove|...> Manages package repositories & ecosystem sources');
+        WriteLn('  lib install <pkg>          Installs package into project /lib');
+        WriteLn('  lib remove <name>          Removes package from lib/');
+        WriteLn('  lib update [name]          Updates package(s) to latest version');
+        WriteLn('  lib outdated               Checks for available updates in installed packages');
+        WriteLn('  lib list                   Lists installed libraries');
+        WriteLn('  lib search <term>          Searches packages in registered repositories');
+        WriteLn('  lib pack [dir]             Assembles release artifact (.zip with SHA-256)');
+        WriteLn('  theme [list]               Displays active and available Bootswatch themes');
+        WriteLn('  theme use <name>           Sets active default theme in package.json & index.html');
+        WriteLn('  theme add <name>           Adds a theme for optimized bundling');
+        WriteLn('  theme remove <name>        Removes a theme from package.json');
+        WriteLn('  theme reset                Resets theme filters (bundles all themes)');
+        WriteLn('  extension <list|...>       Manages development extensions & tools');
+        WriteLn('');
+        WriteLn('  # === Project Configuration & Search Paths ===');
+        WriteLn('  license [list|show|set]    Manages project license (MIT, Apache, LGPL, etc.)');
+        WriteLn('  meta [show|bump|sync]      Manages project metadata and syncs SemVer across monorepo');
+        WriteLn('  path list                  Lists all active unit search paths (-Fu) in app.cfg');
+        WriteLn('  path add <dir|pas2js:p>    Adds a folder or official Pas2JS package to app.cfg');
+        WriteLn('  path remove <target>       Removes a search path or Pas2JS package from app.cfg');
+        WriteLn('  path available             Lists all built-in Pas2JS packages available to link');
+        WriteLn('  reset [--bare] [--force]   Resets project to a clean slate');
+        WriteLn('');
+        WriteLn('  # === Framework Diagnostics & Maintenance ===');
+        WriteLn('  doctor                     Diagnoses environment tools (Git, Lazarus, FPC, etc.)');
+        WriteLn('  self-update [--check]      Syncs & recompiles BlaiseVue directly from GitHub');
+        WriteLn('  channel [use <name>]       Inspects or switches framework branch (main/develop)');
+        WriteLn('  rollback                   Restores previous CLI binary from backup (bv.bak)');
+        WriteLn('  update [--dry-run]         Updates project infrastructure non-destructively');
+        WriteLn('');
+        WriteLn('  # === Cockpit Session ===');
+        WriteLn('  exit / quit / q            Exits the cockpit shell');
+        WriteLn('  <shell command>            Runs any system command (git, npm, dir, etc.)');
+        WriteLn('  ============================================================');
         WriteLn('');
       end
 
@@ -22085,26 +24695,26 @@ begin
           ExecInCockpit(BvExePath, ActivePath, InputLine);
       end
 
-      // `mormot` / `server` backend commands
-      else if (CmdName = 'mormot') or (CmdName = 'server') then
+      // `mormot` backend commands
+      else if CmdName = 'mormot' then
       begin
         ExecInCockpit(BvExePath, ActivePath, InputLine);
       end
 
-      // `dev` / `serve`
-      else if (CmdName = 'dev') or (CmdName = 'serve') then
+      // `dev`
+      else if CmdName = 'dev' then
       begin
-        ExecInCockpit(BvExePath, ActivePath, 'dev');
+        ExecInCockpit(BvExePath, ActivePath, InputLine);
       end
 
       // `build`
       else if CmdName = 'build' then
       begin
-        ExecInCockpit(BvExePath, ActivePath, 'run build');
+        ExecInCockpit(BvExePath, ActivePath, InputLine);
       end
 
-      // `run`
-      else if CmdName = 'run' then
+      // `preview`
+      else if CmdName = 'preview' then
       begin
         ExecInCockpit(BvExePath, ActivePath, InputLine);
       end
@@ -22238,7 +24848,29 @@ begin
       // Fallback: execute as a system shell command (e.g. git status, npm install, dir, ls)
       else
       begin
-        ExecShellCmd(ActivePath, InputLine);
+        if FindClosestCockpitCommand(CmdName, Suggestion) and (not HasCommand(CmdName)) and
+           (CmdName <> 'dir') and (CmdName <> 'ls') and (CmdName <> 'cat') and (CmdName <> 'type') and
+           (CmdName <> 'cd') and (CmdName <> 'mkdir') and (CmdName <> 'rmdir') and (CmdName <> 'copy') and
+           (CmdName <> 'cp') and (CmdName <> 'mv') and (CmdName <> 'del') and (CmdName <> 'rm') then
+        begin
+          WriteLn('');
+          WriteLn('  [?] Unrecognized command: ''' + CmdName + '''');
+          WriteLn('   Did you mean: ''' + Suggestion + '''?');
+          if Tokens.Count > 1 then
+          begin
+            RestOfLine := '';
+            for i := 1 to Tokens.Count - 1 do
+              RestOfLine := RestOfLine + ' ' + Tokens[i];
+            WriteLn('   Try: ' + Suggestion + RestOfLine);
+          end
+          else
+            WriteLn('   Try: ' + Suggestion);
+          WriteLn('');
+        end
+        else
+        begin
+          ExecShellCmd(ActivePath, InputLine);
+        end;
       end;
     end;
   finally
@@ -22257,25 +24889,7 @@ procedure CmdEnter;
 var
   CurDir, ProjName, ProjVer: string;
 begin
-  // LOCAL ONLY RULE: Must be inside a recognized BlaiseVue project!
-  if not IsValidBlaiseVueProject then
-  begin
-    WriteLn('');
-    WriteLn('========================================================================');
-    WriteLn('  [ERROR] "bv enter" can only be executed inside a BlaiseVue project.');
-    WriteLn('  Current directory: ', GetCurrentDir);
-    WriteLn('');
-    WriteLn('  To enter an already registered project from anywhere, use:');
-    WriteLn('    bv use <project-name>');
-    WriteLn('');
-    WriteLn('  To view registered projects:');
-    WriteLn('    bv project list');
-    WriteLn('========================================================================');
-    WriteLn('');
-    Halt(1);
-  end;
-
-  CurDir := ExcludeTrailingPathDelimiter(GetCurrentDir);
+  CurDir := RequireBlaiseVueProject('bv enter');
   ProjName := GetProjectNameFromDir(CurDir);
   ProjVer := GetProjectVersionFromDir(CurDir);
   RunCockpitShell(ProjName, CurDir);
@@ -22341,10 +24955,11 @@ end;
 procedure CmdUpdate;
 var
   BaseDir, ServerDir, ServerLprFile, AppCfgFile, PkgFile, DistJsDir, RtlDest, RtlSrc: string;
-  BackupDir, CurTimestamp, ProjName, ProjVer, LprContent, PkgContent: string;
+  BackupDir, CurTimestamp, ProjName, ProjVer, LprContent, PkgContent, LazCleanName: string;
   DryRun, OnlyServer, OnlyFrontend, NoBackup, Force: Boolean;
   HasServer, HasFrontend, ServerUpdated, PkgUpdated, RtlUpdated: Boolean;
-  i, BackupCount: Integer;
+  LazCreated, LazUpdated, ServerLpiCreated, ServerLpiUpdated: Boolean;
+  i, BackupCount, LazUnitsCount, ServerUnitsCount: Integer;
   UsesPos, VarPos, BeginPos, PosMarker, MainPortPos, MainBeginPos, p: Integer;
 { Creates a timestamped backup copy of a file before performing destructive mutations. }
   procedure CreateFileBackup(const RelFilePath: string);
@@ -22439,13 +25054,20 @@ begin
   ServerUpdated := False;
   PkgUpdated := False;
   RtlUpdated := False;
+  LazCreated := False;
+  LazUpdated := False;
+  ServerLpiCreated := False;
+  ServerLpiUpdated := False;
+  LazUnitsCount := 0;
+  ServerUnitsCount := 0;
+  LazCleanName := '';
 
   // -------------------------------------------------------------------
   // 1. Backend Server Infrastructure
   // -------------------------------------------------------------------
   if HasServer and (not OnlyFrontend) then
   begin
-    WriteLn('[1/3] Inspecting server infrastructure in server/server.lpr...');
+    WriteLn('[1/4] Inspecting server infrastructure in server/server.lpr...');
     LprContent := ReadFileToString(ServerLprFile);
 
     // 1.1: Ensure windows unit is in uses clause
@@ -22603,6 +25225,25 @@ begin
       WriteLn('  [OK] server/server.lpr is already up to date with the latest features.');
     end;
 
+    // 1.6: Synchronize server/server.lpi for Lazarus IDE
+    SyncServerLazarusProject(ServerDir, DryRun, ServerLpiCreated, ServerLpiUpdated, ServerUnitsCount);
+    if ServerLpiCreated then
+    begin
+      if not DryRun then
+        WriteLn('  [+] Created server/server.lpi (', ServerUnitsCount, ' server units indexed).')
+      else
+        WriteLn('  [*] [DRY-RUN] Would create server/server.lpi (', ServerUnitsCount, ' server units indexed).');
+    end
+    else if ServerLpiUpdated then
+    begin
+      if not DryRun then
+        WriteLn('  [+] Synchronized server/server.lpi (', ServerUnitsCount, ' server units indexed).')
+      else
+        WriteLn('  [*] [DRY-RUN] Would synchronize server/server.lpi (', ServerUnitsCount, ' server units indexed).');
+    end
+    else
+      WriteLn('  [OK] server/server.lpi is up to date (', ServerUnitsCount, ' server units indexed).');
+
     // Check if server binary should be rebuilt
     if (ServerUpdated or Force) and (not DryRun) then
     begin
@@ -22620,7 +25261,7 @@ begin
   // -------------------------------------------------------------------
   if HasFrontend and (not OnlyServer) then
   begin
-    WriteLn('[2/3] Inspecting frontend infrastructure...');
+    WriteLn('[2/4] Inspecting frontend infrastructure...');
 
     // 2.1: package.json scripts
     if FileExists(PkgFile) then
@@ -22628,19 +25269,48 @@ begin
       PkgContent := ReadFileToString(PkgFile);
       if Pos('"dev": "bv serve"', PkgContent) > 0 then
       begin
-        PkgContent := StringReplace(PkgContent, '"dev": "bv serve"', '"dev": "bv run dev"', [rfReplaceAll]);
+        PkgContent := StringReplace(PkgContent, '"dev": "bv serve"', '"dev": "bv dev"', [rfReplaceAll]);
         PkgUpdated := True;
       end;
-      if Pos('"server": "bv server"', PkgContent) = 0 then
+      if Pos('"dev": "bv run dev"', PkgContent) > 0 then
       begin
-        if Pos('"build": "bv run build"', PkgContent) > 0 then
-        begin
-          PkgContent := StringReplace(PkgContent,
-            '"build": "bv run build"',
-            '"build": "bv run build",' + #10 + '    "server": "bv server",' + #10 + '    "mormot": "bv mormot"',
-            [rfReplaceAll]);
-          PkgUpdated := True;
-        end;
+        PkgContent := StringReplace(PkgContent, '"dev": "bv run dev"', '"dev": "bv dev"', [rfReplaceAll]);
+        PkgUpdated := True;
+      end;
+      if Pos('"dev" : "bv run dev"', PkgContent) > 0 then
+      begin
+        PkgContent := StringReplace(PkgContent, '"dev" : "bv run dev"', '"dev" : "bv dev"', [rfReplaceAll]);
+        PkgUpdated := True;
+      end;
+      if Pos('"build": "bv run build"', PkgContent) > 0 then
+      begin
+        PkgContent := StringReplace(PkgContent, '"build": "bv run build"', '"build": "bv build --release"', [rfReplaceAll]);
+        PkgUpdated := True;
+      end;
+      if Pos('"build" : "bv run build"', PkgContent) > 0 then
+      begin
+        PkgContent := StringReplace(PkgContent, '"build" : "bv run build"', '"build" : "bv build --release"', [rfReplaceAll]);
+        PkgUpdated := True;
+      end;
+      if Pos('    "server": "bv server",' + #10, PkgContent) > 0 then
+      begin
+        PkgContent := StringReplace(PkgContent, '    "server": "bv server",' + #10, '', [rfReplaceAll]);
+        PkgUpdated := True;
+      end;
+      if Pos('    "server" : "bv server",' + #10, PkgContent) > 0 then
+      begin
+        PkgContent := StringReplace(PkgContent, '    "server" : "bv server",' + #10, '', [rfReplaceAll]);
+        PkgUpdated := True;
+      end;
+      if Pos('    "server": "bv server",' + #13#10, PkgContent) > 0 then
+      begin
+        PkgContent := StringReplace(PkgContent, '    "server": "bv server",' + #13#10, '', [rfReplaceAll]);
+        PkgUpdated := True;
+      end;
+      if Pos('    "server" : "bv server",' + #13#10, PkgContent) > 0 then
+      begin
+        PkgContent := StringReplace(PkgContent, '    "server" : "bv server",' + #13#10, '', [rfReplaceAll]);
+        PkgUpdated := True;
       end;
 
       if PkgUpdated then
@@ -22649,7 +25319,7 @@ begin
         begin
           CreateFileBackup('package.json');
           WriteStringToFile(PkgFile, PkgContent);
-          WriteLn('  [+] Synchronized package.json scripts ("dev": "bv run dev").');
+          WriteLn('  [+] Synchronized package.json scripts ("dev": "bv dev", "build": "bv build --release").');
         end
         else
           WriteLn('  [*] [DRY-RUN] Would update package.json scripts');
@@ -22681,9 +25351,50 @@ begin
   end;
 
   // -------------------------------------------------------------------
-  // 3. Registry & Non-destructive Safety Summary
+  // 3. Lazarus IDE Project Files (.lpi / .lpr)
   // -------------------------------------------------------------------
-  WriteLn('[3/3] Finalizing project registry and safety check...');
+  if not OnlyServer then
+  begin
+    WriteLn('[3/4] Inspecting Lazarus IDE project files...');
+    SyncLazarusProject(ExcludeTrailingPathDelimiter(BaseDir), DryRun, LazCreated, LazUpdated, LazUnitsCount, LazCleanName);
+    if LazCreated then
+    begin
+      if not DryRun then
+        WriteLn('  [+] Created ', LazCleanName, '.lpr and ', LazCleanName, '.lpi (', LazUnitsCount, ' units indexed).')
+      else
+        WriteLn('  [*] [DRY-RUN] Would create ', LazCleanName, '.lpr and ', LazCleanName, '.lpi (', LazUnitsCount, ' units indexed).');
+    end
+    else if LazUpdated then
+    begin
+      if not DryRun then
+        WriteLn('  [+] Synchronized ', LazCleanName, '.lpi (', LazUnitsCount, ' units indexed).')
+      else
+        WriteLn('  [*] [DRY-RUN] Would synchronize ', LazCleanName, '.lpi (', LazUnitsCount, ' units indexed).');
+    end
+    else
+      WriteLn('  [OK] ', LazCleanName, '.lpi and ', LazCleanName, '.lpr are already up to date (', LazUnitsCount, ' units indexed).');
+  end;
+
+  // 3.5: Mobile Android Gradle self-healing
+  if DirectoryExists(BaseDir + 'mobile' + DirectorySeparator + 'android') then
+  begin
+    if EnsureAndroidGradleCompatibility(BaseDir + 'mobile' + DirectorySeparator + 'android') then
+      WriteLn('  [+] Auto-repaired Mobile Android Gradle configuration (Java 17 LTS / Release signing).')
+    else
+      WriteLn('  [OK] Mobile Android Gradle configuration is up to date.');
+  end
+  else if DirectoryExists(BaseDir + 'android') then
+  begin
+    if EnsureAndroidGradleCompatibility(BaseDir + 'android') then
+      WriteLn('  [+] Auto-repaired Android Gradle configuration (Java 17 LTS / Release signing).')
+    else
+      WriteLn('  [OK] Android Gradle configuration is up to date.');
+  end;
+
+  // -------------------------------------------------------------------
+  // 4. Registry & Non-destructive Safety Summary
+  // -------------------------------------------------------------------
+  WriteLn('[4/4] Finalizing project registry and safety check...');
   if not DryRun then
   begin
     CmdProjectAdd;
@@ -22698,6 +25409,8 @@ begin
   begin
     if ServerUpdated then
       WriteLn('  Server:        UPDATED (server.lpr + recompiled binary)')
+    else if ServerLpiCreated or ServerLpiUpdated then
+      WriteLn('  Server:        UPDATED (server/server.lpi synchronized)')
     else
       WriteLn('  Server:        ALREADY UP TO DATE');
   end
@@ -22710,6 +25423,16 @@ begin
       WriteLn('  Frontend:      UPDATED (scripts and/or runtime assets)')
     else
       WriteLn('  Frontend:      ALREADY UP TO DATE');
+  end;
+
+  if not OnlyServer then
+  begin
+    if LazCreated then
+      WriteLn('  Lazarus IDE:   CREATED (', LazCleanName, '.lpi, ', LazCleanName, '.lpr)')
+    else if LazUpdated then
+      WriteLn('  Lazarus IDE:   SYNCHRONIZED (', LazCleanName, '.lpi)')
+    else
+      WriteLn('  Lazarus IDE:   ALREADY UP TO DATE (', LazCleanName, '.lpi)');
   end;
 
   WriteLn('  Safety Rule:   100% PRESERVED - All user custom directories and files');
@@ -22734,7 +25457,11 @@ var
   SDKDir, OSName, GitVer, FpcExe, FpcVer, FpcSource, Pas2Path, Pas2Ver: string;
   NodeVer, NpmVer, MormotPath, BranchName, ShortHash, RemoteUrl, DockerVer: string;
   PyExe, PyVer, PySource, IfpcExe, IfpcVer, IfpcSource: string;
+  JavaHome, JavaVer, JavaSource, AdbExe, AdbVer, AdbSource: string;
+  EmuExe, EmuSource, AvdListStr, CapVer, AndroidSdkPath, DummyStr: string;
   HasGit, HasFpc, HasPas2, HasMormot, HasNode, HasLazarus, HasPython, HasIfpc: Boolean;
+  HasJava, HasAdb, HasEmulator: Boolean;
+  MajorJava, AvdCount: Integer;
   AllHealthy: Boolean;
 begin
   SDKDir := ExcludeTrailingPathDelimiter(GetSDKPath);
@@ -22881,6 +25608,67 @@ begin
     WriteLn('  [!] Docker CLI:           Not detected (Optional: production micro-containers)');
 
   WriteLn('');
+  WriteLn('[3] Mobile & Cross-Platform Tooling (Android / Capacitor):');
+
+  // Java Runtime (JDK)
+  HasJava := FindBestJavaHome(JavaHome, JavaVer, JavaSource);
+  if HasJava then
+  begin
+    MajorJava := ParseJavaVersionMajor(JavaVer, DummyStr);
+    if (MajorJava >= 17) and (MajorJava <= 21) then
+      WriteLn('  [v] Java Runtime (JDK):   v', JavaVer, ' (', JavaSource, ' - LTS compatible)')
+    else
+      WriteLn('  [!] Java Runtime (JDK):   v', JavaVer, ' (', JavaSource, ' - Warning: Java 17 or 21 LTS recommended for Gradle)');
+  end
+  else
+    WriteLn('  [!] Java Runtime (JDK):   Not detected (Required for Android Gradle builds - install Java 17 LTS)');
+
+  // Android SDK
+  AndroidSdkPath := FindAndroidSdkPath;
+  if AndroidSdkPath <> '' then
+    WriteLn('  [v] Android SDK:          Detected at ', AndroidSdkPath)
+  else
+    WriteLn('  [!] Android SDK:          Not detected in standard paths (set ANDROID_HOME)');
+
+  // ADB
+  HasAdb := FindAndroidADBInfo(AdbExe, AdbVer, AdbSource);
+  if HasAdb then
+    WriteLn('  [v] Android Debug Bridge: v', AdbVer, ' (', AdbSource, ')')
+  else
+    WriteLn('  [!] Android Debug Bridge: Not detected (Optional: required for USB/emulator run)');
+
+  // Android Emulator & AVDs
+  HasEmulator := FindAndroidEmulatorInfo(EmuExe, EmuSource, AvdCount, AvdListStr);
+  if HasEmulator then
+  begin
+    if AvdCount > 0 then
+      WriteLn('  [v] Android Emulator:     Detected (', AvdCount, ' AVD: ', AvdListStr, ')')
+    else
+      WriteLn('  [!] Android Emulator:     Detected, but 0 AVDs created (create an AVD in Android Studio Device Manager)');
+  end
+  else
+    WriteLn('  [!] Android Emulator:     Not detected in Android SDK');
+
+  // Capacitor CLI & Runtime
+  CapVer := '';
+  if ExecCmdCapture('npx --no-install cap --version 2>&1', CapVer) and (CapVer <> '') and (Pos('error', LowerCase(CapVer)) = 0) and (Pos('not found', LowerCase(CapVer)) = 0) then
+  begin
+    CapVer := Trim(CapVer);
+    if Copy(CapVer, 1, 2) = '8.' then
+      WriteLn('  [v] Capacitor Runtime:    v', CapVer, ' (v8 LTS active - run "bv mobile upgrade --check" to inspect updates)')
+    else if Copy(CapVer, 1, 2) = '7.' then
+      WriteLn('  [!] Capacitor Runtime:    v', CapVer, ' (v7 Legacy - run "bv mobile upgrade" to migrate to latest)')
+    else if Copy(CapVer, 1, 2) = '6.' then
+      WriteLn('  [!] Capacitor Runtime:    v', CapVer, ' (v6 Legacy - run "bv mobile upgrade" to migrate to latest)')
+    else
+      WriteLn('  [v] Capacitor Runtime:    v', CapVer, ' (installed in project)');
+  end
+  else if ExecCmdCapture('cap --version 2>&1', CapVer) and (CapVer <> '') and (Pos('error', LowerCase(CapVer)) = 0) then
+    WriteLn('  [v] Capacitor CLI:        v', Trim(CapVer), ' (global PATH)')
+  else
+    WriteLn('  [!] Capacitor CLI:        Not detected (scaffold mobile project via bv mobile init)');
+
+  WriteLn('');
   WriteLn('======================================================================');
   if AllHealthy then
     WriteLn('  [v] Diagnostics complete: Your environment is 100% healthy and ready!')
@@ -22898,7 +25686,7 @@ procedure CmdSelfUpdate(const ChannelOverride: string = '');
 var
   SDKDir, CurBranch, TargetBranch, GitVer, GitStatusOut, FilteredStatus, LineStr, FetchOut: string;
   DiffOut, BehindOut, AheadOut, CheckoutOut, PullOut, FpcExe, FpcVer, FpcSource: string;
-  BinDir, CompCmd, CompOut, TargetBv, MoveCmd, DummyOut: string;
+  BinDir, CompCmd, CompOut, TargetBv, TargetNew, TargetBak, MoveCmd, DummyOut: string;
   DiffList: TStringList;
   CheckOnly, ForceUpdate, NeedRecompile, HadLocalBinMod: Boolean;
   i: Integer;
@@ -23100,18 +25888,24 @@ begin
     Exit;
   end;
 
+  // Pre-update safety: always ensure a persistent backup of the current working binary exists
+  BinDir := SDKDir + DirectorySeparator + 'bin';
+  {$IFDEF WINDOWS}
+  ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && if exist bv.exe copy /y bv.exe bv.bak.exe > nul 2>&1', DummyOut);
+  {$ELSE}
+  ExecCmdCapture('cd ''' + BinDir + ''' && if [ -f bv ]; then cp -f bv bv.bak 2>/dev/null; fi', DummyOut);
+  {$ENDIF}
+
   // Reset local CLI binary modifications before git checkout/pull to avoid binary merge conflicts
   if HadLocalBinMod or (TargetBranch <> CurBranch) or ForceUpdate then
   begin
-    BinDir := SDKDir + DirectorySeparator + 'bin';
+    ExecCmdCapture('git -C "' + SDKDir + '" checkout -- bin/bv bin/bv.exe bin/bv.o 2>/dev/null', DummyOut);
+    // If Git checkout removed or did not have bin/bv, restore from persistent backup immediately
     {$IFDEF WINDOWS}
-    MoveCmd := 'cmd.exe /c cd /d "' + BinDir + '" && del /f /q bv_old.exe > nul 2>&1 & move /y bv.exe bv_old.exe > nul 2>&1';
-    ExecCmdCapture(MoveCmd, DummyOut);
+    ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && if not exist bv.exe if exist bv.bak.exe copy /y bv.bak.exe bv.exe > nul 2>&1', DummyOut);
     {$ELSE}
-    MoveCmd := 'cd ''' + BinDir + ''' && rm -f bv_old 2>/dev/null; mv -f bv bv_old 2>/dev/null';
-    ExecCmdCapture(MoveCmd, DummyOut);
+    ExecCmdCapture('cd ''' + BinDir + ''' && if [ ! -f bv ] && [ -f bv.bak ]; then cp -f bv.bak bv && chmod +x bv 2>/dev/null; fi', DummyOut);
     {$ENDIF}
-    ExecCmdCapture('git -C "' + SDKDir + '" checkout -- bin/bv bin/bv.exe bin/bv.o', DummyOut);
   end;
 
   // 7. Checkout branch if switching
@@ -23158,36 +25952,52 @@ begin
 
     BinDir := SDKDir + DirectorySeparator + 'bin';
     {$IFDEF WINDOWS}
-    MoveCmd := 'cmd.exe /c cd /d "' + BinDir + '" && del /f /q bv_old.exe > nul 2>&1 & move /y bv.exe bv_old.exe > nul 2>&1';
-    ExecCmdCapture(MoveCmd, DummyOut);
-    CompCmd := 'cmd.exe /c cd /d "' + BinDir + '" && "' + FpcExe + '" -MObjFPC -Sh bv.pas';
+    TargetNew := BinDir + DirectorySeparator + 'bv_new.exe';
+    TargetBv := BinDir + DirectorySeparator + 'bv.exe';
+    TargetBak := BinDir + DirectorySeparator + 'bv.bak.exe';
+    // Clean any previous temporary binary
+    ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && del /f /q bv_new.exe > nul 2>&1', DummyOut);
+    // Compile into isolated temporary target (bv_new.exe)
+    CompCmd := 'cmd.exe /c cd /d "' + BinDir + '" && "' + FpcExe + '" -MObjFPC -Sh -obv_new.exe bv.pas';
     ExecCmdCapture(CompCmd, CompOut);
     {$ELSE}
-    MoveCmd := 'cd ''' + BinDir + ''' && rm -f bv_old 2>/dev/null; mv -f bv bv_old 2>/dev/null';
-    ExecCmdCapture(MoveCmd, DummyOut);
-    CompCmd := 'cd ''' + BinDir + ''' && ''' + FpcExe + ''' -MObjFPC -Sh bv.pas && chmod +x bv';
+    TargetNew := BinDir + DirectorySeparator + 'bv_new';
+    TargetBv := BinDir + DirectorySeparator + 'bv';
+    TargetBak := BinDir + DirectorySeparator + 'bv.bak';
+    // Clean any previous temporary binary
+    ExecCmdCapture('cd ''' + BinDir + ''' && rm -f bv_new 2>/dev/null', DummyOut);
+    // Compile into isolated temporary target (bv_new)
+    CompCmd := 'cd ''' + BinDir + ''' && ''' + FpcExe + ''' -MObjFPC -Sh -obv_new bv.pas && chmod +x bv_new';
     ExecCmdCapture(CompCmd, CompOut);
     {$ENDIF}
 
-    TargetBv := BinDir + DirectorySeparator + {$IFDEF WINDOWS}'bv.exe'{$ELSE}'bv'{$ENDIF};
-    if FileExists(TargetBv) then
+    if FileExists(TargetNew) then
     begin
-      WriteLn('  [SUCCESS] Binary ' + ExtractFileName(TargetBv) + ' recompiled successfully!');
+      // Atomic promotion: current binary backed up to bv.bak, bv_new becomes live bv
       {$IFDEF WINDOWS}
-      ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && del /f /q bv_old.exe > nul 2>&1', DummyOut);
+      ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && if exist bv.exe (del /f /q bv_old.exe > nul 2>&1 & move /y bv.exe bv_old.exe > nul 2>&1 & copy /y bv_old.exe bv.bak.exe > nul 2>&1 & del /f /q bv_old.exe > nul 2>&1) & move /y bv_new.exe bv.exe > nul 2>&1', DummyOut);
       {$ELSE}
-      ExecCmdCapture('cd ''' + BinDir + ''' && rm -f bv_old 2>/dev/null', DummyOut);
+      ExecCmdCapture('cd ''' + BinDir + ''' && if [ -f bv ]; then cp -f bv bv.bak 2>/dev/null; fi && mv -f bv_new bv && chmod +x bv', DummyOut);
       {$ENDIF}
+      WriteLn('  [SUCCESS] Binary ' + ExtractFileName(TargetBv) + ' recompiled and updated successfully!');
+      WriteLn('  [BACKUP] Previous binary safely preserved at ' + ExtractFileName(TargetBak));
     end
     else
     begin
       WriteLn('  [ERROR] CLI recompilation failed:');
       WriteLn(CompOut);
+      // Clean up failed artifacts and ensure current binary is intact
       {$IFDEF WINDOWS}
-      ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && move /y bv_old.exe bv.exe > nul 2>&1', DummyOut);
+      ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && del /f /q bv_new.exe > nul 2>&1', DummyOut);
+      if not FileExists(TargetBv) and FileExists(TargetBak) then
+        ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && copy /y bv.bak.exe bv.exe > nul 2>&1', DummyOut);
       {$ELSE}
-      ExecCmdCapture('cd ''' + BinDir + ''' && mv -f bv_old bv 2>/dev/null', DummyOut);
+      ExecCmdCapture('cd ''' + BinDir + ''' && rm -f bv_new 2>/dev/null', DummyOut);
+      if not FileExists(TargetBv) and FileExists(TargetBak) then
+        ExecCmdCapture('cd ''' + BinDir + ''' && cp -f bv.bak bv && chmod +x bv 2>/dev/null', DummyOut);
       {$ENDIF}
+      WriteLn('  [SAFETY] Existing binary preserved intact. Your CLI remains fully functional.');
+      WriteLn('  [HINT] Run "bv rollback" anytime if you need to revert to the previous binary.');
     end;
   end;
 
@@ -23275,6 +26085,58 @@ begin
   end;
 end;
 
+// =====================================================================
+//  FRAMEWORK BINARY ROLLBACK (bv rollback)
+// =====================================================================
+
+procedure CmdRollback;
+var
+  SDKDir, BinDir, TargetBv, TargetBak, DummyOut, VerOut: string;
+begin
+  SDKDir := ExcludeTrailingPathDelimiter(GetSDKPath);
+  BinDir := SDKDir + DirectorySeparator + 'bin';
+  TargetBv := BinDir + DirectorySeparator + {$IFDEF WINDOWS}'bv.exe'{$ELSE}'bv'{$ENDIF};
+  TargetBak := BinDir + DirectorySeparator + {$IFDEF WINDOWS}'bv.bak.exe'{$ELSE}'bv.bak'{$ENDIF};
+
+  WriteLn('');
+  WriteLn('======================================================================');
+  WriteLn('  BlaiseVue Binary Rollback');
+  WriteLn('======================================================================');
+
+  if not FileExists(TargetBak) then
+  begin
+    WriteLn('  [ERROR] No backup binary found at:');
+    WriteLn('          ' + TargetBak);
+    WriteLn('  A backup (bv.bak) is automatically created whenever "bv self-update"');
+    WriteLn('  or "bv channel use" recompiles the CLI.');
+    WriteLn('======================================================================');
+    WriteLn('');
+    Halt(1);
+  end;
+
+  WriteLn('  [+] Restoring CLI binary from backup: ' + ExtractFileName(TargetBak) + '...');
+  {$IFDEF WINDOWS}
+  ExecCmdCapture('cmd.exe /c cd /d "' + BinDir + '" && del /f /q bv_old.exe > nul 2>&1 & move /y bv.exe bv_old.exe > nul 2>&1 & copy /y bv.bak.exe bv.exe > nul 2>&1 & del /f /q bv_old.exe > nul 2>&1', DummyOut);
+  {$ELSE}
+  ExecCmdCapture('cd ''' + BinDir + ''' && cp -f bv.bak bv && chmod +x bv 2>/dev/null', DummyOut);
+  {$ENDIF}
+
+  if FileExists(TargetBv) then
+  begin
+    WriteLn('  [SUCCESS] Successfully restored binary to previous version!');
+    ExecCmdCapture('"' + TargetBv + '" --version', VerOut);
+    if Trim(VerOut) <> '' then
+      WriteLn('  Active CLI: ' + Trim(VerOut));
+  end
+  else
+  begin
+    WriteLn('  [ERROR] Failed to restore backup binary.');
+    Halt(1);
+  end;
+  WriteLn('======================================================================');
+  WriteLn('');
+end;
+
 //  MAIN ENTRY POINT
 
 // =====================================================================
@@ -23295,96 +26157,114 @@ begin
     WriteLn('');
     WriteLn('  BlaiseVue CLI v' + GetCliVersion + ' (Universal Pascal Full-Stack Platform)');
     WriteLn('  ============================================================');
-    WriteLn('  Usage: bv <command> [options]');
-    WriteLn('');
-    WriteLn('  # === Development & Server ===');
-    WriteLn('  bv dev                     Starts dev server with HMR on http://localhost:8080 (alias: bv serve)');
-    WriteLn('  bv run dev                 Builds project in dev mode & launches dev server on http://localhost:8080');
-    WriteLn('  bv build                   Compiles project without launching server (ideal for watchers & CI)');
-    WriteLn('  bv run build               Builds optimized production bundle with hashes in dist/');
-    WriteLn('  bv run preview             Local HTTP preview of production build (port 5000)');
-    WriteLn('  bv run ssg                 Pre-renders all routes into static HTML (SSG)');
-    WriteLn('  bv doc [--serve]           Generates interactive component documentation & playground');
-    WriteLn('  bv wasm <info|benchmark>   WebAssembly acceleration and performance benchmarks');
-    WriteLn('  bv check [file]            Validates component templates against script declarations (AST Type-Checker)');
-    WriteLn('  bv clean                   Cleans generated build files (generated/ and dist/)');
-    WriteLn('');
-    WriteLn('  # === Scaffolding & Generators ===');
+  WriteLn('  Usage: bv <command> [options]');
+  WriteLn('');
+  WriteLn('  # === Scaffolding & Generators ===');
+  if not IsValidBlaiseVueProject then
     WriteLn('  bv create <name>           Scaffolds a new project with 4-tier testing hierarchy & domain services');
-    WriteLn('  bv g c <Name>              Scaffolds a component (.bv) & test in tests/components/ (alias: bv new c)');
-    WriteLn('  bv g v <Name>              Scaffolds a route view (.bv) & test in tests/views/ (alias: bv new v)');
-    WriteLn('  bv g s <Name>              Scaffolds a pure Pascal domain service in src/services/ (alias: bv new s)');
-    WriteLn('  bv g t <Name>              Scaffolds a Pascal test file (.test.pas) (alias: bv new t)');
-    WriteLn('  bv remove <c|v|s|t|m|d> [Name] Safely deletes a component, view, service, test, or platform (m/d)');
-    WriteLn('  bv list <c|v|s|t|lib>      Lists project components, views, services, tests, or installed libs');
-    WriteLn('  bv rename <c|v|s|p>        Smart rename for services, components, views, or project name');
-    WriteLn('');
-    WriteLn('  # === Backend & Full-Stack (Synopse mORMot 2) ===');
-    WriteLn('  bv mormot init             Scaffolds mORMot 2 backend server in server/');
-    WriteLn('  bv mormot run [--port <p>] Starts native backend server (auto-fallback to next port if busy)');
-    WriteLn('  bv mormot build [--release] Compiles native server binary with Free Pascal (-O2 debug / -O3 release)');
-    WriteLn('  bv mormot kill             Terminates lingering server.exe instances and releases ports');
-    WriteLn('  bv mormot status           Queries running mORMot 2 health endpoint (/api/status)');
-    WriteLn('  bv mormot deploy [--zip]   Assembles standalone production bundle in deploy/');
-    WriteLn('  bv mormot crud <Model>     Scaffolds full-stack ORM model, REST API & reactive DataGrid');
-    WriteLn('  bv mormot auth             Scaffolds JWT authentication, AuthService, LoginView & route guards');
-    WriteLn('  bv mormot docs | swagger   Generates interactive OpenAPI 3.0 & Swagger UI explorer (/api/docs)');
-    WriteLn('  bv mormot docker [--build] Scaffolds sub-20MB Alpine micro-container & docker-compose.yml');
-    WriteLn('  bv mormot rpc              Scaffolds type-safe Pascal RPC client proxies from SOA interfaces');
-    WriteLn('');
-    WriteLn('  # === Multiplatform (Mobile & Desktop) ===');
-    WriteLn('  bv mobile init [name] [id] Configures Capacitor and scaffolds Android/iOS project');
-    WriteLn('  bv mobile remove [-y]      Safely deletes mobile/ and capacitor.config.json');
-    WriteLn('  bv desktop remove [-y]     Safely deletes desktop/ native wrapper project');
-    WriteLn('  bv mobile sync             Syncs dist/ with native Android assets');
-    WriteLn('  bv mobile open             Syncs and opens Android Studio');
-    WriteLn('  bv mobile build            Builds native Android Debug APK via Gradle');
-    WriteLn('  bv desktop init [name]     Scaffolds WebUI & Lazarus desktop project in desktop/');
-    WriteLn('  bv desktop sync            Syncs dist/ with desktop/assets/');
-    WriteLn('  bv desktop build [target]  Compiles native binary (windows|linux|macos|all)');
-    WriteLn('  bv desktop run [target]    Builds and launches desktop app for target');
-    WriteLn('');
-    WriteLn('  # === Package & Theme Management ===');
-    WriteLn('  bv repo <list|add|remove|default|sync|search> Manages package repositories & ecosystem sources');
-    WriteLn('  bv lib install [<repo>:]<pkg[@ver]|url> [--global|-g] Installs package in project /lib or user cache');
-    WriteLn('  bv lib remove <name> [--global|-g] Removes package from lib/ or global cache');
-    WriteLn('  bv lib update [[<repo>:]name] [--global|-g] Updates package(s) to latest version');
-    WriteLn('  bv lib outdated [--global|-g] Checks for available updates in installed packages');
-    WriteLn('  bv lib list [--global|-g]  Lists installed libraries');
-    WriteLn('  bv lib search [[<repo>:]term] Searches packages in registered repositories');
-    WriteLn('  bv lib pack [dir]          Assembles & verifies release artifact (.zip with SHA-256)');
-    WriteLn('  bv theme [list]            Displays active and available themes in @blaise-themes');
-    WriteLn('  bv theme add <name>        Adds a theme to package.json for optimized bundling');
-    WriteLn('  bv theme remove <name>     Removes a theme from package.json');
-    WriteLn('  bv theme use <name>        Sets active default theme in package.json & index.html');
-    WriteLn('  bv theme reset             Resets theme filters (bundles all themes in compatibility mode)');
-    WriteLn('  bv extension <list|install|remove|pack> [target] Manages development extensions & tools');
-    WriteLn('');
-    WriteLn('  # === Project Metadata & Licensing ===');
-    WriteLn('  bv license [list|show|set] Manages project license (MIT, Apache, LGPL, GPL, BSD, etc.)');
-    WriteLn('  bv meta [show|get|set|bump|sync] Manages project metadata and syncs SemVer across monorepo');
-    WriteLn('  bv reset [--bare] [--force] Resets project to a clean slate (protected against demo-app)');
-    WriteLn('');
-    WriteLn('  # === Compiler Search Paths & Legacy Migration ===');
-    WriteLn('  bv path [list]             Lists all active unit search paths (-Fu) in app.cfg');
-    WriteLn('  bv path add <dir|pas2js:p> Adds a folder or official Pas2JS package to app.cfg');
-    WriteLn('  bv path remove <target>    Removes a search path or Pas2JS package from app.cfg');
-    WriteLn('  bv path available          Lists all built-in Pas2JS packages available to link');
-    WriteLn('');
-    WriteLn('  # === Framework Diagnostics & Git Auto-Updater ===');
-    WriteLn('  bv doctor                  Diagnoses environment tools (Git, Lazarus, FPC, Pas2JS, Node)');
-    WriteLn('  bv self-update [--check] [--force] Syncs & recompiles BlaiseVue directly from GitHub via Git');
-    WriteLn('  bv channel [use <name>]    Inspects or switches framework branch (main/develop)');
-    WriteLn('  bv update [--dry-run]      Surgically syncs project infrastructure with latest framework features');
-    WriteLn('');
-    WriteLn('  # === Cockpit & Multi-Project Management ===');
-    WriteLn('  bv enter                   Enters interactive project Cockpit shell ([bv: my-app] >)');
-    WriteLn('  bv use <project-name>      Jumps into registered project Cockpit shell from anywhere');
-    WriteLn('  bv project add             Registers current project into global registry');
-    WriteLn('  bv project list            Lists registered projects (* active)');
-    WriteLn('  bv project current         Shows active project details');
-    WriteLn('  bv project remove <name>   Unregisters a project from global registry');
-    WriteLn('');
+  WriteLn('  bv g c <Name>              Scaffolds a component (.bv) & test in tests/components/ (alias: bv new c)');
+  WriteLn('  bv g v <Name>              Scaffolds a route view (.bv) & test in tests/views/ (alias: bv new v)');
+  WriteLn('  bv g s <Name>              Scaffolds a pure Pascal domain service in src/services/ (alias: bv new s)');
+  WriteLn('  bv g t <Name>              Scaffolds a Pascal test file (.test.pas) (alias: bv new t)');
+  WriteLn('  bv remove <c|v|s|t> <Name> Safely deletes a component, view, service, or test');
+  WriteLn('  bv list <c|v|s|t|lib>      Lists project components, views, services, tests, or installed libs');
+  WriteLn('  bv rename <c|v|s|p>        Smart rename for services, components, views, or project name');
+  WriteLn('');
+  WriteLn('  # === Workspace & Project Cockpit ===');
+  WriteLn('  bv files [path] [--all]    Displays structured project files tree');
+  WriteLn('  bv clear                   Clears terminal screen');
+  WriteLn('  bv enter                   Enters interactive project Cockpit shell ([bv: my-app] >)');
+  WriteLn('  bv use <project-name>      Jumps into registered project Cockpit shell from anywhere');
+  WriteLn('  bv project add             Registers current project into global registry');
+  WriteLn('  bv project list            Lists registered projects (* active)');
+  WriteLn('  bv project current         Shows active project details');
+  WriteLn('  bv project remove <name>   Unregisters a project from global registry');
+  WriteLn('');
+  WriteLn('  # === Development & Frontend Build ===');
+  WriteLn('  bv dev                     Builds project in dev mode & starts dev server with HMR on http://localhost:8080');
+  WriteLn('  bv build                   Compiles frontend in development/debug mode (Lazarus & watchers)');
+  WriteLn('  bv build --release         Builds optimized production bundle with hashes in dist/');
+  WriteLn('  bv preview                 Local HTTP preview of production build (port 5000)');
+  WriteLn('  bv ssg                     Pre-renders all routes into static HTML (SSG)');
+  WriteLn('  bv wasm <info|benchmark>   WebAssembly acceleration and performance benchmarks');
+  WriteLn('  bv check [file]            Validates component templates against script declarations (AST Type-Checker)');
+  WriteLn('  bv clean                   Cleans generated build files (generated/ and dist/)');
+  WriteLn('');
+  WriteLn('  # === Backend & Full-Stack (Synopse mORMot 2) ===');
+  WriteLn('  bv mormot init             Scaffolds mORMot 2 backend server in server/');
+  WriteLn('  bv mormot run [--release] [--fresh] [--port <p>] Starts native backend server (--fresh auto-terminates lingering instances)');
+  WriteLn('  bv mormot build [--release] Compiles native server binary with Free Pascal (-O2 debug / -O3 release)');
+  WriteLn('  bv mormot kill [--port <p>] Gracefully terminates server.exe, frees socket & verifies port release');
+  WriteLn('  bv mormot status           Queries running mORMot 2 health endpoint (/api/status)');
+  WriteLn('  bv mormot deploy [--zip]   Assembles standalone production bundle in deploy/');
+  WriteLn('  bv mormot crud <Model>     Scaffolds full-stack ORM model, REST API & reactive DataGrid');
+  WriteLn('  bv mormot auth             Scaffolds JWT authentication, AuthService, LoginView & route guards');
+  WriteLn('  bv mormot docs | swagger   Generates interactive OpenAPI 3.0 & Swagger UI explorer (/api/docs)');
+  WriteLn('  bv mormot docker [--build] Scaffolds sub-20MB Alpine micro-container & docker-compose.yml');
+  WriteLn('  bv mormot rpc              Scaffolds type-safe Pascal RPC client proxies from SOA interfaces');
+  WriteLn('');
+  WriteLn('  # === Mobile (Android & iOS via Capacitor) ===');
+  WriteLn('  bv mobile init [name] [id] [--version=<v>] Scaffolds Capacitor & mobile/ native project');
+  WriteLn('  bv mobile upgrade [--check] Migrates Capacitor dependencies & updates Gradle');
+  WriteLn('  bv mobile sync             Syncs dist/ with native mobile assets');
+  WriteLn('  bv mobile remove [-y]      Safely deletes mobile/ and capacitor.config.json');
+  WriteLn('  bv mobile build android    Builds native Android Debug APK in mobile/bin/android/');
+  WriteLn('  bv mobile build android --release Builds optimized Release APK (R8/ProGuard)');
+  WriteLn('  bv mobile build android --bundle Builds Google Play Android App Bundle (.aab)');
+  WriteLn('  bv mobile emulator list    Lists installed Android Virtual Devices (AVD)');
+  WriteLn('  bv mobile emulator start   Boots Android emulator in background');
+  WriteLn('  bv mobile emulator kill    Terminates lingering emulator & QEMU processes');
+  WriteLn('  bv mobile run android      Installs and launches APK on connected USB device');
+  WriteLn('  bv mobile run android [--emulator] [--release] [--fresh] Compiles, deploys and launches app (flags can be combined)');
+  WriteLn('  bv mobile open android     Opens project in Android Studio');
+  WriteLn('');
+  WriteLn('  # === Desktop (Free Pascal, Lazarus IDE & WebUI) ===');
+  WriteLn('  bv desktop init [name]     Scaffolds Lazarus (.lpi, .lpr) & WebUI project');
+  WriteLn('  bv desktop sync            Syncs dist/ with desktop/assets/');
+  WriteLn('  bv desktop remove [-y]     Safely deletes desktop/ native project');
+  WriteLn('  bv desktop build [target]  Compiles Debug native binary (live console logging)');
+  WriteLn('  bv desktop build [target] --release Compiles Release native binary (pure GUI - NO console)');
+  WriteLn('  bv desktop run [target]    Launches desktop app in Debug mode (with console)');
+  WriteLn('  bv desktop run [target] --release Launches desktop app in Release mode (clean GUI)');
+  WriteLn('');
+  WriteLn('  # === Testing & Docs ===');
+  WriteLn('  bv test                    Compiles and runs all unit tests (.test.pas) with Vitest');
+  WriteLn('  bv test e2e                Runs headless browser End-to-End integration test suite');
+  WriteLn('  bv doc [--serve]           Generates interactive component documentation & playground');
+  WriteLn('  bv studio                  Launches BlaiseVue Studio developer dashboard (port 9000)');
+  WriteLn('');
+  WriteLn('  # === Package & Theme Management ===');
+  WriteLn('  bv repo <list|add|remove|default|sync|search> Manages package repositories & ecosystem sources');
+  WriteLn('  bv lib install [<repo>:]<pkg[@ver]|url> [--global|-g] Installs package in project /lib or user cache');
+  WriteLn('  bv lib remove <name> [--global|-g] Removes package from lib/ or global cache');
+  WriteLn('  bv lib update [[<repo>:]name] [--global|-g] Updates package(s) to latest version');
+  WriteLn('  bv lib outdated [--global|-g] Checks for available updates in installed packages');
+  WriteLn('  bv lib list [--global|-g]  Lists installed libraries');
+  WriteLn('  bv lib search [[<repo>:]term] Searches packages in registered repositories');
+  WriteLn('  bv lib pack [dir]          Assembles & verifies release artifact (.zip with SHA-256)');
+  WriteLn('  bv theme [list]            Displays active and available themes in @blaise-themes');
+  WriteLn('  bv theme add <name>        Adds a theme to package.json for optimized bundling');
+  WriteLn('  bv theme remove <name>     Removes a theme from package.json');
+  WriteLn('  bv theme use <name>        Sets active default theme in package.json & index.html');
+  WriteLn('  bv theme reset             Resets theme filters (bundles all themes in compatibility mode)');
+  WriteLn('  bv extension <list|install|remove|pack> [target] Manages development extensions & tools');
+  WriteLn('');
+  WriteLn('  # === Project Configuration & Search Paths ===');
+  WriteLn('  bv license [list|show|set] Manages project license (MIT, Apache, LGPL, GPL, BSD, etc.)');
+  WriteLn('  bv meta [show|get|set|bump|sync] Manages project metadata and syncs SemVer across monorepo');
+  WriteLn('  bv path [list]             Lists all active unit search paths (-Fu) in app.cfg');
+  WriteLn('  bv path add <dir|pas2js:p> Adds a folder or official Pas2JS package to app.cfg');
+  WriteLn('  bv path remove <target>    Removes a search path or Pas2JS package from app.cfg');
+  WriteLn('  bv path available          Lists all built-in Pas2JS packages available to link');
+  WriteLn('  bv reset [--bare] [--force] Resets project to a clean slate (protected against demo-app)');
+  WriteLn('');
+  WriteLn('  # === Framework Diagnostics & Maintenance ===');
+  WriteLn('  bv doctor                  Diagnoses environment tools (Git, Lazarus, FPC, Pas2JS, Node)');
+  WriteLn('  bv self-update [--check] [--force] Syncs & recompiles BlaiseVue directly from GitHub via Git');
+  WriteLn('  bv channel [use <name>]    Inspects or switches framework branch (main/develop)');
+  WriteLn('  bv rollback                Restores previous CLI binary from backup (bv.bak)');
+  WriteLn('  bv update [--dry-run]      Surgically syncs project infrastructure with latest framework features');
+  WriteLn('');
     WriteLn('  For complete documentation and guides:');
     WriteLn('    https://github.com/affonsoelias/BlaiseVue');
     WriteLn('');
@@ -23428,12 +26308,42 @@ begin
 
   else if Cmd = 'build' then
   begin
-    CmdBuild;
+    if ParamCount >= 2 then
+    begin
+      if LowerCase(ParamStr(2)) = '--release' then
+        CmdRunBuild
+      else
+      begin
+        WriteLn('Unknown build option: ', ParamStr(2));
+        WriteLn('Usage: bv build [--release]');
+        Halt(1);
+      end;
+    end
+    else
+      CmdBuild;
   end
 
-  else if (Cmd = 'serve') or (Cmd = 'dev') then
+  else if Cmd = 'dev' then
   begin
+    if ParamCount >= 2 then
+    begin
+      WriteLn('Unknown dev option: ', ParamStr(2));
+      WriteLn('Usage: bv dev');
+      Halt(1);
+    end;
+    CmdBuild;
     CmdServe;
+  end
+
+  else if Cmd = 'preview' then
+  begin
+    if ParamCount >= 2 then
+    begin
+      WriteLn('Unknown preview option: ', ParamStr(2));
+      WriteLn('Usage: bv preview');
+      Halt(1);
+    end;
+    CmdRunPreview;
   end
 
   else if Cmd = 'transpile' then
@@ -23490,57 +26400,59 @@ begin
   begin
     if (ParamCount < 2) then
     begin
-      WriteLn('Usage: bv remove <c|v|s|t|m|d> [Name]');
-      WriteLn('Types: component (c), view (v), service (s), test (t), mobile (m), desktop (d)');
+      WriteLn('Usage: bv remove <c|v|s|t> <Name>');
+      WriteLn('Types: component (c), view (v), service (s), test (t)');
       Halt(1);
     end;
 
     TypeArg := LowerCase(ParamStr(2));
     if (TypeArg = 'mobile') or (TypeArg = 'm') then
     begin
-      CmdRemoveMobile((ParamCount >= 3) and ((ParamStr(3) = '-y') or (ParamStr(3) = '--yes') or (ParamStr(3) = '-f') or (ParamStr(3) = '--force')));
+      WriteLn('ERROR: "bv remove ' + ParamStr(2) + '" was removed.');
+      WriteLn('Please use "bv mobile remove" to safely delete the mobile platform.');
+      Halt(1);
     end
     else if (TypeArg = 'desktop') or (TypeArg = 'd') then
     begin
-      CmdRemoveDesktop((ParamCount >= 3) and ((ParamStr(3) = '-y') or (ParamStr(3) = '--yes') or (ParamStr(3) = '-f') or (ParamStr(3) = '--force')));
+      WriteLn('ERROR: "bv remove ' + ParamStr(2) + '" was removed.');
+      WriteLn('Please use "bv desktop remove" to safely delete the desktop platform.');
+      Halt(1);
+    end;
+
+    if (ParamCount < 3) then
+    begin
+      WriteLn('Usage: bv remove <c|v|s|t> <Name>');
+      WriteLn('Types: component (c), view (v), service (s), test (t)');
+      Halt(1);
+    end;
+    NameArg := ParamStr(3);
+    if (TypeArg = 'c') or (TypeArg = 'comp') or (TypeArg = 'component') then
+      CmdRemoveComponent(NameArg)
+    else if (TypeArg = 'v') or (TypeArg = 'view') then
+      CmdRemoveView(NameArg)
+    else if (TypeArg = 's') or (TypeArg = 'service') or (TypeArg = 'serv') then
+      CmdRemoveService(NameArg)
+    else if (TypeArg = 't') or (TypeArg = 'test') then
+      CmdRemoveTest(NameArg)
+    else if (TypeArg = 'lib') or (TypeArg = 'l') then
+    begin
+      IsGlobalArg := False;
+      PkgNameArg := '';
+      for i := 3 to ParamCount do
+      begin
+        CurP := ParamStr(i);
+        if (CurP = '--global') or (CurP = '-g') then
+          IsGlobalArg := True
+        else if PkgNameArg = '' then
+          PkgNameArg := CurP;
+      end;
+      if PkgNameArg = '' then PkgNameArg := NameArg;
+      CmdLibRemove(PkgNameArg, IsGlobalArg);
     end
     else
     begin
-      if (ParamCount < 3) then
-      begin
-        WriteLn('Usage: bv remove <c|v|s|t> <Name>');
-        WriteLn('Types: component (c), view (v), service (s), test (t), mobile (m), desktop (d)');
-        Halt(1);
-      end;
-      NameArg := ParamStr(3);
-      if (TypeArg = 'c') or (TypeArg = 'comp') or (TypeArg = 'component') then
-        CmdRemoveComponent(NameArg)
-      else if (TypeArg = 'v') or (TypeArg = 'view') then
-        CmdRemoveView(NameArg)
-      else if (TypeArg = 's') or (TypeArg = 'service') or (TypeArg = 'serv') then
-        CmdRemoveService(NameArg)
-      else if (TypeArg = 't') or (TypeArg = 'test') then
-        CmdRemoveTest(NameArg)
-      else if (TypeArg = 'lib') or (TypeArg = 'l') then
-      begin
-        IsGlobalArg := False;
-        PkgNameArg := '';
-        for i := 3 to ParamCount do
-        begin
-          CurP := ParamStr(i);
-          if (CurP = '--global') or (CurP = '-g') then
-            IsGlobalArg := True
-          else if PkgNameArg = '' then
-            PkgNameArg := CurP;
-        end;
-        if PkgNameArg = '' then PkgNameArg := NameArg;
-        CmdLibRemove(PkgNameArg, IsGlobalArg);
-      end
-      else
-      begin
-        WriteLn('Unknown type: ', ParamStr(2), '. Use "component" (c), "view" (v), "service" (s), "test" (t), "mobile" (m) or "desktop" (d).');
-        Halt(1);
-      end;
+      WriteLn('Unknown type: ', ParamStr(2), '. Use "component" (c), "view" (v), "service" (s) or "test" (t).');
+      Halt(1);
     end;
   end
 
@@ -23698,38 +26610,9 @@ begin
       CmdTheme(LowerCase(ParamStr(2)), ParamStr(3));
   end
 
-  else if Cmd = 'run' then
+  else if (Cmd = 'run') and (ParamCount >= 3) and (LowerCase(ParamStr(2)) = 'compile-sfc') then
   begin
-    if ParamCount < 2 then
-    begin
-      WriteLn('Usage: bv run <build|dev|preview>');
-      Halt(1);
-    end;
-
-    Cmd := LowerCase(ParamStr(2));
-    if Cmd = 'build' then CmdRunBuild
-
-    else if Cmd = 'dev' then
-    begin
-      CmdBuild;
-      CmdServe;
-    end
-
-    else if Cmd = 'ssg' then CmdSSG
-
-    else if Cmd = 'preview' then CmdRunPreview
-
-    else if Cmd = 'compile-sfc' then
-    begin
-      if ParamCount < 2 then Halt(1);
-      CmdCompileSFC(ParamStr(2));
-    end
-
-    else
-    begin
-      WriteLn('Unknown run subcommand: ', Cmd);
-      Halt(1);
-    end;
+    CmdCompileSFC(ParamStr(3));
   end
 
   else if Cmd = 'doc' then
@@ -23770,7 +26653,7 @@ begin
   begin
     if ParamCount < 2 then
     begin
-      WriteLn('Usage: bv mobile <init [name] [id]|sync [target]|build [target] [--release]|run [target] [--emulator [name]]|open [target]|emulator <list|start|run>>');
+      WriteLn('Usage: bv mobile <init [name] [id] [--version=<v>]|upgrade [--check]|sync [target]|build [target] [--release]|run [target] [--emulator [name]]|open [target]|emulator <list|start|run>>');
       WriteLn('       Targets: android | ios | all (default: android)');
       Halt(1);
     end;
@@ -23795,7 +26678,24 @@ begin
     CmdStudio;
   end
 
-  else if (Cmd = 'mormot') or (Cmd = 'server') then
+  else if Cmd = 'clear' then
+  begin
+    ClearScreen(False);
+  end
+
+  else if Cmd = 'files' then
+  begin
+    if (ParamCount >= 2) and ((LowerCase(ParamStr(2)) = '--all') or (LowerCase(ParamStr(2)) = '-a')) then
+      CmdFiles('', True)
+    else if (ParamCount >= 3) and ((LowerCase(ParamStr(3)) = '--all') or (LowerCase(ParamStr(3)) = '-a')) then
+      CmdFiles(ParamStr(2), True)
+    else if ParamCount >= 2 then
+      CmdFiles(ParamStr(2), False)
+    else
+      CmdFiles('', False);
+  end
+
+  else if Cmd = 'mormot' then
   begin
     if ParamCount < 2 then
     begin
@@ -23848,6 +26748,10 @@ begin
   else if (Cmd = 'channel') or (Cmd = 'branch') then
   begin
     CmdChannel;
+  end
+  else if (Cmd = 'rollback') or (Cmd = 'revert-cli') then
+  begin
+    CmdRollback;
   end
   else if Cmd = 'enter' then
   begin
