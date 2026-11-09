@@ -18,6 +18,8 @@
 | **v4.3** | ✅ Delivered | **Type-Safe Pascal RPC with mORMot 2** | JSON-RPC 2.0, dual HTTP/WebSocket transport, shared `ICustomerService` interfaces, compile-time API validation. |
 | **v4.4** | ✅ Delivered | **Resilience, Packaging & Ecosystem** | AST Type-Checker (`bv check`), IndexedDB offline delta sync, Virtual Scroll, Relational CRUD, `bv create --lib`, `bv lib pack`, decentralized registries (`bv repo`, `bv lib`), `blaise-reports`, unified extensions (`bv extension`). |
 | **v5.0** | 🚀 In Progress | **Cloud, PWA & Real-Time Era** | BlaiseX state machines (`TBVStore 2.0`), PWA Background Sync (`bv pwa`), Node-free dynamic SSR (<3ms), BlaiseStudio 2.0 visual modeler, Vue 3-style Fragments (Multi-Root Templates). |
+| **v5.2** | 🗺️ Planned | **Distributed Enterprise & Micro-Frontends** | Dynamic Module Federation (`RegisterRemoteModule`), remote `.bv` component and BlaiseX store slice loading at runtime. |
+| **v5.4** | 🗺️ Planned | **Serverless Edge Computing (BlaiseEdge)** | Native WebAssembly System Interface (`wasm32-wasi`) compilation, dedicated `bv edge` CLI suite, sub-2MB microservices with <0.2ms cold start for Cloudflare Workers & Fastly. |
 
 ---
 
@@ -175,7 +177,7 @@ ightarrow$ `OrderItems`) with foreign key constraints.
 
 | 5.0 Strategic Pillar | Target Milestone | Focus Subsystem | Primary Architecture |
 |---|:---:|---|---|
-| **Pillar 1: BlaiseX (`TBVStore 2.0` & State Machines)** | v5.0-alpha | `core/BVStore.pas` | Finite State Machines, time-travel history, action middleware |
+| **Pillar 1: BlaiseX (`TBVStore 2.0` & State Machines)** | ✅ Complete | `core/BVStore.pas`, `core/BVFSM.pas` | Modular slices, FSM engine, middleware pipeline, time-travel undo/redo, DevTools bridge, CLI scaffolding |
 | **Pillar 2: Full PWA Engine & Background Sync (`bv pwa`)** | v5.0-beta | `bin/bv.pas`, `core/BVDataSet.pas` | Service Worker caching, background sync with `ApplyUpdates` |
 | **Pillar 3: Node-Free Dynamic Server-Side Rendering (mORMot 2 SSR)** | v5.0-rc | `server/`, `core/BVCompiler.pas` | Native Pascal SSR executed in <3ms without Node.js |
 | **Pillar 4: BlaiseVue Studio 2.0 (Visual Modeler & Cockpit)** | v5.0-GA | `packages/core/blaise-studio/` | Drag-and-drop DB modeler, visual AST editor, live telemetry |
@@ -183,25 +185,47 @@ ightarrow$ `OrderItems`) with foreign key constraints.
 
 ---
 
-### 🗄️ Pillar 1: BlaiseX — Advanced Global State & Finite State Machines (`TBVStore 2.0`)
-**Goal**: Evolve the existing `$store` (`core/BVStore.pas`) into an enterprise state management system inspired by Pinia, Redux Toolkit, and XState, written in 100% pure Object Pascal.
+### 🗄️ Pillar 1: BlaiseX — Advanced Global State & Finite State Machines (`TBVStore 2.0`) [✅ COMPLETE]
+**Goal**: Evolved the legacy `$store` (`core/BVStore.pas`) into an enterprise-grade state management system inspired by Pinia, Redux Toolkit, and XState, written in 100% pure Object Pascal.
 
-- **Motivation**: Large-scale financial, medical, and industrial systems require formal state machines (e.g. checkout workflows, claim approvals, multi-step wizards) with strict state transition guarantees and complete audit trails.
-- **Architectural Scope**:
-  1. **Finite State Machines (FSM)**:
-     - Declarative states (`idle`, `loading`, `success`, `error`) and allowed transitions preventing invalid state jumps:
-       ```pascal
-       Machine := TBVStateMachine.Create('Payment')
-         .Initial('idle')
-         .State('idle', ['SUBMIT' -> 'processing'])
-         .State('processing', ['RESOLVE' -> 'completed', 'REJECT' -> 'failed'])
-         .State('completed', [])
-         .State('failed', ['RETRY' -> 'processing']);
-       ```
-  2. **Action Middleware & Pipeline**:
-     - Pre/post action interceptors allowing centralized logging, performance metrics, and authorization validation before executing mutations.
-  3. **Time-Travel Debugging & State Snapshots**:
-     - Integrated state history buffer enabling *Undo*, *Redo*, and real-time state replay directly within BlaiseVue DevTools.
+- **Status**: **Fully implemented, tested, and documented (Chapters 15 & 55)**.
+- **Architectural Scope & Delivered Features**:
+  1. **Deterministic Finite State Machines (`core/BVFSM.pas`)**:
+     - Declarative states, initial state definition, and allowed transitions preventing illegal state jumps.
+     - Guard expressions (`TBVFSMGuardFunc`) enabling conditional transition gating.
+     - Lifecycle hooks: `OnEnter`, `OnExit`, and transition action callbacks (`TBVFSMActionProc`).
+     - Real-time event auditing history and observer subscriptions (`Subscribe` / `Unsubscribe`).
+     - Automatic reactive proxy mounting on store slices (`AttachMachine`).
+  2. **Modular Store Slices & BlaiseX Core (`core/BVStore.pas`)**:
+     - Modular domain slices via `DefineStore('sliceName', InitialState)`.
+     - Synchronous atomic mutations (`Mutation`) and asynchronous business logic actions (`Action`).
+     - Cached computed getters (`Getter`).
+     - Direct property patching (`Patch`) and reset capabilities (`Reset`).
+     - Backward compatibility with lightweight v4.x single-store expressions (`$store.state`).
+  3. **Enterprise Middleware & Interceptor Pipeline (`core/BVMiddleware.pas`)**:
+     - Pre/post action & mutation interceptors with rich context (`TBVMiddlewareContext`).
+     - Built-in `TBVLoggerMiddleware`: colorized execution timing and state inspection.
+     - Built-in `TBVAuthGuardMiddleware`: RBAC role and permission validation protecting sensitive actions.
+     - Built-in `TBVTelemetryMiddleware`: operation counters, average/max duration, and slow call alerts.
+     - Functional anonymous middleware (`Slice.Use(BeforeProc, AfterProc)`).
+  4. **Time-Travel Debugging & State Snapshots (`core/BVStoreHistory.pas`)**:
+     - High-performance, bounded snapshot ring buffer (`TBVStoreHistory`).
+     - Instant rollback and replay: `Undo`, `Redo`, `TimeTravel(index)`.
+     - JSON audit log export and state hydration (`ExportJSON`, `ImportJSON`).
+     - Browser DevTools global hook (`window.__BLAISEX_DEVTOOLS__`).
+  5. **Component (`.bv`), AST Compiler & Pascal DX Integration**:
+     - Direct template reactivity: `{{ $store.cart.count }}` and `{{ $store.order.flow.current }}`.
+     - Direct template event handlers: `@click="$blaisex.Commit('cart/increment')"` and `@click="$blaisex.Undo('cart')"`.
+     - AST checker whitelist update for `$blaisex` in `bin/bv.pas`.
+     - Pure Pascal Zero-ASM helpers in `core/BVPascalDX.pas`: `UseStore`, `UseFSM`, `StoreCommit`, `StoreDispatch`, `StoreGet`, `StoreUndo`, `StoreRedo`.
+  6. **Automated CLI Scaffolding & 4-Tier Testing**:
+     - `bv g store <Name>`: Scaffolds store slice in `src/stores/` and unit test in `tests/stores/`.
+     - `bv g fsm <Name>`: Scaffolds state machine in `src/machines/` and unit test in `tests/machines/`.
+     - `bv list store` & `bv list fsm`: Interactive project element listing.
+     - `bv remove store <Name>` & `bv remove fsm <Name>`: Safe deletion of units and tests.
+     - Automatic test runner integration (`bv test`) across all 4 testing tiers.
+  7. **Official Documentation**:
+     - Dedicated Chapter 55: `doc/Documentation/55-blaisex-state-machines.md`.
 
 ---
 
@@ -279,6 +303,93 @@ ightarrow$ `OrderItems`) with foreign key constraints.
   5. **Verification & Quality Harness**:
      - Comprehensive test suite in `tests/framework/fragments.test.pas` validating sibling tags, dynamic table rows inside `<tbody>`, scoped styles, and nested fragment components.
 
+
+---
+
+## 🌐 5. Future Horizons within the 5.x Era (v5.2 – v5.4) — [Planned 🗺️]
+
+In strict adherence to the [Even/Odd Minor Version Parity rule defined in `VERSIONING.md`](../../VERSIONING.md), the 5.x cycle continues to evolve through stable even minor releases, expanding the framework into distributed corporate architectures and high-density edge computing without introducing breaking changes.
+
+```
+                                      BLAISEVUE 5.x EXTENDED HORIZON
+                                                    │
+                           ┌────────────────────────┴────────────────────────┐
+                           ▼                                                 ▼
+                     [v5.2 Release]                                    [v5.4 Release]
+                   Micro-Frontends &                                 BlaiseEdge & WASI
+               Dynamic Module Federation                           Serverless Computing
+           (Distributed Corporate Frontends)                      (Ultra-Fast Edge Microservices)
+```
+
+| Extended Milestone | Target Cycle | Focus Subsystem | Primary Architecture |
+|---|:---:|---|---|
+| **v5.2: Micro-Frontends & Module Federation** | Stable Minor | `core/BVRouting.pas`, `core/BVStore.pas` | Remote `.bv` component streaming, isolated CSS namespace, dynamic BlaiseX slice registration |
+| **v5.4: BlaiseEdge & WASI Serverless** | Stable Minor | `bin/bv.pas`, `server/edge/` | Dedicated `bv edge` CLI suite, `wasm32-wasi` target, <0.2ms cold start, sub-2MB footprint for Cloudflare Workers & Fastly |
+
+---
+
+### 🧩 5.1 BlaiseVue 5.2: Micro-Frontends & Dynamic Module Federation
+**Goal**: Enable large enterprise teams (banking, telecom, global ERPs) to build, deploy, and scale independent frontend applications that compose seamlessly into a unified BlaiseVue shell at runtime without requiring full-application recompilation.
+
+- **Motivation**:
+  1. **Autonomous Team Velocity**: Domain teams (e.g., Billing, Inventory, Authentication) ship features and deploy bugfixes to independent endpoints independently.
+  2. **Zero-Downtime Hot Upgrades**: Remote modules update dynamically on remote CDN endpoints; client shells fetch the latest manifest upon route transition without user downtime.
+  3. **Shared Reactive Kernel**: All federated micro-frontends share the single global Pascal runtime instance (`rtl.js`, `BVReactivity`, and `BVStore`), eliminating duplicate bundle downloads.
+
+- **Architectural Scope**:
+  1. **Dynamic Module Registry (`RegisterRemoteModule`)**:
+     - Remote entry points expose a standardized manifest:
+       ```pascal
+       RegisterRemoteModule('billing', 'https://billing.company.com/remoteEntry.js');
+       ```
+     - Remote components load lazily on route activation:
+       ```pascal
+       Router.AddRoute('/billing', RemoteComponent('billing', 'BillingDashboard'));
+       ```
+  2. **Federated BlaiseX Store Slices**:
+     - Remote micro-frontends dynamically register domain store slices and FSMs directly into the host shell's active store:
+       ```pascal
+       // Inside remote billing module:
+       DefineStore('billing', InitialBillingState)
+         .AttachMachine('invoiceFlow', CreateInvoiceMachine);
+       ```
+     - Shell templates and child micro-frontends interact reactively via `$store.billing` with full time-travel debugging and telemetry support.
+  3. **Style & Asset Isolation**:
+     - Enforced `<style scoped>` encapsulation prevents CSS leakage between federated micro-apps and the host shell.
+  4. **CLI Module Federation Scaffolding**:
+     - `bv create <app> --mf-remote`: Scaffolds a standalone federated micro-frontend with export manifest.
+     - `bv create <app> --mf-host`: Scaffolds a federated shell container.
+
+---
+
+### ☁️ 5.2 BlaiseVue 5.4: BlaiseEdge & WASI Serverless Computing
+**Goal**: Compile Pascal business logic, mORMot 2 services, and backend endpoints into native WebAssembly System Interface (`wasm32-wasi`) binaries, delivering sub-millisecond cold starts and sub-2MB memory footprints for global edge cloud platforms.
+
+- **Motivation**:
+  1. **The Serverless Cold-Start Dilemma**: Traditional JavaScript, Python, and Java serverless functions incur 200ms–2000ms cold starts and require heavy 150MB–500MB runtime VMs.
+  2. **Deterministic Pascal Performance**: Free Pascal's direct compilation to WASI produces lean, deterministic binaries that execute instantly without garbage collection stalls or VM warmup.
+  3. **Global Edge Proximity**: Deploying Pascal endpoints to global edge networks (Cloudflare Workers, Fastly Compute@Edge, AWS Lambda Wasm, Wasmer) ensures <5ms API roundtrips globally.
+
+- **Architectural Scope**:
+  1. **Dedicated CLI Command Architecture (`bv edge <init|build|deploy>`)**:
+     - Following BlaiseVue's clean target conventions (`bv mobile` for Capacitor/Android, `bv desktop` for Lazarus/WebUI, `bv mormot` for Linux server/Docker), all serverless edge capabilities are unified under `bv edge`:
+       - `bv edge init`: Scaffolds a standalone edge microservice in `server/edge/` with routing, handlers, and configuration.
+       - `bv edge build`: Cross-compiles the Pascal source directly to `dist/edge/server.wasm` via FPC (`wasm32-wasi`).
+       - `bv edge deploy`: Deploys the standalone Wasm bundle directly to Cloudflare Workers or Fastly Compute.
+     - **Zero Redundancy Guarantee**: Keeps `bv wasm <info|benchmark>` strictly dedicated to client-side in-browser numeric/cryptographic acceleration (`core/BVWasm.pas`), avoiding developer confusion.
+  2. **`wasm32-wasi` Compilation Pipeline**:
+     - Free Pascal (FPC) cross-compilation pipeline targeting standard WASI:
+       ```bash
+       bv edge build
+       ```
+     - Produces a sub-2MB standalone binary (`dist/edge/server.wasm`) with zero external operating system dependencies and zero container overhead.
+  3. **Microsecond Cold-Start & Micro-Memory Footprint**:
+     - Cold start boot time: **<0.2 milliseconds**.
+     - Runtime memory consumption: **<5 MB RAM**.
+  4. **Native Edge Transport Adapters**:
+     - Streaming HTTP and WebSocket request/response adapters bridging mORMot 2 SOA interfaces directly with WASI stdio and socket streams.
+  5. **Cloudflare & Fastly Deployment Templates**:
+     - Automated scaffolding of `wrangler.toml` (Cloudflare Workers) and `fastly.toml` (Fastly Compute) for instant one-command deployment (`bv edge deploy`).
 
 ---
 

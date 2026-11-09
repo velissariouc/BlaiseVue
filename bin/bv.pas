@@ -2128,7 +2128,7 @@ function GenerateComponentUnit(const UnitName, TagName, BVFileName: string; cons
 var
   UsesLine: string;
 begin
-  UsesLine := 'JS, Web, BVComponents, BVReactivity, BVStore, SysUtils, BVPascalDX, BVDataSet';
+  UsesLine := 'JS, Web, BVComponents, BVReactivity, BVStore, BVFSM, SysUtils, BVPascalDX, BVDataSet';
   if Parsed.HasRouter then
     UsesLine := UsesLine + ', BVRouting';
 
@@ -2247,7 +2247,7 @@ begin
   UniqueUnits := TStringList.Create;
   try
 
-    UsesLine := 'JS, Web, BlaiseVue, BVComponents, BVStore, BVCompiler, BVDevTools, BVPascalDX, BVDataSet';
+    UsesLine := 'JS, Web, BlaiseVue, BVComponents, BVStore, BVFSM, BVCompiler, BVDevTools, BVPascalDX, BVDataSet';
     if Parsed.HasRouter then
       UsesLine := UsesLine + ', BVRouting';
 
@@ -3940,7 +3940,7 @@ begin
     Symbols.Add('$theme'); Symbols.Add('$auth');
     Symbols.Add('$rpc'); Symbols.Add('$ws'); Symbols.Add('$api');
     Symbols.Add('$mobile'); Symbols.Add('$desktop'); Symbols.Add('$wasm'); Symbols.Add('$ionic');
-    Symbols.Add('$store'); Symbols.Add('Router'); Symbols.Add('$router'); Symbols.Add('$route');
+    Symbols.Add('$store'); Symbols.Add('$blaisex'); Symbols.Add('Router'); Symbols.Add('$router'); Symbols.Add('$route');
     Symbols.Add('$v'); Symbols.Add('$errors'); Symbols.Add('$validate');
     Symbols.Add('$event'); Symbols.Add('$refs'); Symbols.Add('$slots'); Symbols.Add('$attrs'); Symbols.Add('$index'); Symbols.Add('$emit');
     Symbols.Add('item'); Symbols.Add('idx'); Symbols.Add('index'); Symbols.Add('p');
@@ -7183,6 +7183,343 @@ begin
 end;
 
 // =====================================================================
+//  COMMAND: NEW STORE SLICE (BlaiseX)
+// =====================================================================
+
+procedure CmdNewStore(const StoreName: string; CreateTest: Boolean = True);
+var
+  NormName, StorePath, TargetPath, Content, LowerName: string;
+  TestPath, TestFile, TestContent: string;
+  AppCfgPath, CfgContent: string;
+begin
+  RequireBlaiseVueProject('bv g store');
+  NormName := StoreName;
+  if (Length(NormName) > 1) and ((NormName[1] = 'u') or (NormName[1] = 'U')) and (NormName[2] in ['A'..'Z']) then
+    NormName := Copy(NormName, 2, Length(NormName) - 1);
+
+  if (Length(NormName) > 5) and (LowerCase(Copy(NormName, Length(NormName) - 4, 5)) = 'store') then
+    NormName := Copy(NormName, 1, Length(NormName) - 5);
+
+  LowerName := LowerCase(NormName);
+  StorePath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'stores' + DirectorySeparator;
+  TargetPath := StorePath + 'u' + NormName + 'Store.pas';
+  if FileExists(TargetPath) then
+  begin
+    WriteLn('ERROR: Store "u', NormName, 'Store.pas" already exists!');
+    Halt(1);
+  end;
+
+  ForceDir(StorePath);
+
+  // Ensure src/stores is in app.cfg
+  AppCfgPath := GetCurrentDir + DirectorySeparator + 'app.cfg';
+  if FileExists(AppCfgPath) then
+  begin
+    CfgContent := ReadFileToString(AppCfgPath);
+    if Pos('-Fusrc/stores', CfgContent) = 0 then
+    begin
+      CfgContent := CfgContent + #10 + '-Fusrc/stores';
+      WriteStringToFile(AppCfgPath, CfgContent);
+    end;
+  end;
+
+  Content :=
+    'unit u' + NormName + 'Store;' + #10#10 +
+    '{$mode objfpc}{$H+}' + #10#10 +
+    'interface' + #10#10 +
+    'uses' + #10 +
+    '  JS, SysUtils, BVStore, BVFSM;' + #10#10 +
+    '{ Factory function to initialize and register the ' + NormName + ' store slice }' + #10 +
+    'function Init' + NormName + 'Store: TBVStoreSlice;' + #10#10 +
+    'implementation' + #10#10 +
+    'function Init' + NormName + 'Store: TBVStoreSlice;' + #10 +
+    'var' + #10 +
+    '  InitialState: TJSObject;' + #10 +
+    'begin' + #10 +
+    '  InitialState := TJSObject.new;' + #10 +
+    '  InitialState[''items''] := TJSArray.new;' + #10 +
+    '  InitialState[''count''] := 0;' + #10 +
+    '  InitialState[''loading''] := False;' + #10#10 +
+    '  Result := DefineStore(''' + LowerName + ''', InitialState)' + #10 +
+    '    .Mutation(''increment'', procedure(AState, APayload: JSValue)' + #10 +
+    '      begin' + #10 +
+    '        TJSObject(AState)[''count''] := Integer(TJSObject(AState)[''count'']) + 1;' + #10 +
+    '      end)' + #10 +
+    '    .Mutation(''setLoading'', procedure(AState, APayload: JSValue)' + #10 +
+    '      begin' + #10 +
+    '        TJSObject(AState)[''loading''] := Boolean(APayload);' + #10 +
+    '      end)' + #10 +
+    '    .Mutation(''reset'', procedure(AState, APayload: JSValue)' + #10 +
+    '      begin' + #10 +
+    '        TJSObject(AState)[''count''] := 0;' + #10 +
+    '        TJSObject(AState)[''loading''] := False;' + #10 +
+    '      end)' + #10 +
+    '    .Getter(''isBusy'', function(AState: JSValue): JSValue' + #10 +
+    '      begin' + #10 +
+    '        Result := Boolean(TJSObject(AState)[''loading'']);' + #10 +
+    '      end)' + #10 +
+    '    .Action(''fetchData'', function(ACtx, APayload: JSValue): JSValue' + #10 +
+    '      begin' + #10 +
+    '        TBVStoreSlice(TJSObject(ACtx)[''slice'']).Commit(''setLoading'', True);' + #10 +
+    '        { Business logic / asynchronous action placeholder }' + #10 +
+    '        TBVStoreSlice(TJSObject(ACtx)[''slice'']).Commit(''setLoading'', False);' + #10 +
+    '        Result := True;' + #10 +
+    '      end);' + #10 +
+    'end;' + #10#10 +
+    'initialization' + #10 +
+    '  Init' + NormName + 'Store;' + #10#10 +
+    'end.' + #10;
+
+  WriteStringToFile(TargetPath, Content);
+  WriteLn('Store created: src/stores/u', NormName, 'Store.pas');
+
+  if CreateTest then
+  begin
+    TestPath := GetCurrentDir + DirectorySeparator + 'tests' + DirectorySeparator + 'stores' + DirectorySeparator;
+    TestFile := TestPath + NormName + 'Store.test.pas';
+    if not FileExists(TestFile) then
+    begin
+      ForceDir(TestPath);
+      TestContent :=
+        'program ' + LowerName + '_store_test;' + #10#10 +
+        '{$mode objfpc}' + #10#10 +
+        'uses JS, Web, BVTestUtils, SysUtils, BVStore, u' + NormName + 'Store;' + #10#10 +
+        'var' + #10 +
+        '  Slice: TBVStoreSlice;' + #10#10 +
+        'begin' + #10 +
+        '  Describe(''Store Slice: ' + NormName + ' (BlaiseX)'', procedure' + #10 +
+        '    begin' + #10 +
+        '      Slice := GetStore(''' + LowerName + ''');' + #10#10 +
+        '      It(''should initialize with default state values'', procedure' + #10 +
+        '        begin' + #10 +
+        '          Expect(Slice <> nil).ToBe(True);' + #10 +
+        '          Expect(Integer(TJSObject(Slice.State)[''count''])).ToBe(0);' + #10 +
+        '          Expect(Boolean(TJSObject(Slice.State)[''loading''])).ToBe(False);' + #10 +
+        '        end);' + #10#10 +
+        '      It(''should commit mutations synchronously and update state'', procedure' + #10 +
+        '        begin' + #10 +
+        '          Slice.Commit(''increment'');' + #10 +
+        '          Expect(Integer(TJSObject(Slice.State)[''count''])).ToBe(1);' + #10#10 +
+        '          Slice.Commit(''setLoading'', True);' + #10 +
+        '          Expect(Boolean(TJSObject(Slice.State)[''loading''])).ToBe(True);' + #10 +
+        '          Expect(Boolean(Slice.Get(''isBusy''))).ToBe(True);' + #10 +
+        '        end);' + #10#10 +
+        '      It(''should dispatch actions and return result'', procedure' + #10 +
+        '        var' + #10 +
+        '          Res: JSValue;' + #10 +
+        '        begin' + #10 +
+        '          Res := Slice.Dispatch(''fetchData'');' + #10 +
+        '          Expect(Boolean(Res)).ToBe(True);' + #10 +
+        '          Expect(Boolean(TJSObject(Slice.State)[''loading''])).ToBe(False);' + #10 +
+        '        end);' + #10#10 +
+        '      It(''should support time-travel undo and redo'', procedure' + #10 +
+        '        begin' + #10 +
+        '          Slice.Commit(''reset'');' + #10 +
+        '          Expect(Integer(TJSObject(Slice.State)[''count''])).ToBe(0);' + #10#10 +
+        '          Expect(Slice.Undo).ToBe(True);' + #10 +
+        '          Expect(Integer(TJSObject(Slice.State)[''count''])).ToBe(1);' + #10#10 +
+        '          Expect(Slice.Redo).ToBe(True);' + #10 +
+        '          Expect(Integer(TJSObject(Slice.State)[''count''])).ToBe(0);' + #10 +
+        '        end);' + #10 +
+        '    end);' + #10 +
+        'end.' + #10;
+
+      WriteStringToFile(TestFile, TestContent);
+      WriteLn('Test created: tests/stores/', NormName, 'Store.test.pas');
+    end;
+  end;
+end;
+
+// =====================================================================
+//  COMMAND: REMOVE STORE SLICE
+// =====================================================================
+
+procedure CmdRemoveStore(const StoreName: string);
+var
+  NormName, TargetPath, TestPath: string;
+begin
+  RequireBlaiseVueProject('bv remove store');
+  NormName := StoreName;
+  if (Length(NormName) > 1) and ((NormName[1] = 'u') or (NormName[1] = 'U')) and (NormName[2] in ['A'..'Z']) then
+    NormName := Copy(NormName, 2, Length(NormName) - 1);
+  if (Length(NormName) > 5) and (LowerCase(Copy(NormName, Length(NormName) - 4, 5)) = 'store') then
+    NormName := Copy(NormName, 1, Length(NormName) - 5);
+
+  TargetPath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'stores' + DirectorySeparator + 'u' + NormName + 'Store.pas';
+  if FileExists(TargetPath) then
+  begin
+    DeleteFile(TargetPath);
+    WriteLn('Removed: src/stores/u', NormName, 'Store.pas');
+  end
+  else
+    WriteLn('Store not found: src/stores/u', NormName, 'Store.pas');
+
+  TestPath := GetCurrentDir + DirectorySeparator + 'tests' + DirectorySeparator + 'stores' + DirectorySeparator + NormName + 'Store.test.pas';
+  if FileExists(TestPath) then
+  begin
+    DeleteFile(TestPath);
+    WriteLn('Removed associated test: ', ExtractRelativePath(GetCurrentDir + DirectorySeparator, TestPath));
+  end;
+
+  WriteLn('Store slice "', NormName, '" removed.');
+end;
+
+// =====================================================================
+//  COMMAND: NEW FINITE STATE MACHINE (BVFSM)
+// =====================================================================
+
+procedure CmdNewFSM(const FSMName: string; CreateTest: Boolean = True);
+var
+  NormName, FSMPath, TargetPath, Content, LowerName: string;
+  TestPath, TestFile, TestContent: string;
+  AppCfgPath, CfgContent: string;
+begin
+  RequireBlaiseVueProject('bv g fsm');
+  NormName := FSMName;
+  if (Length(NormName) > 1) and ((NormName[1] = 'u') or (NormName[1] = 'U')) and (NormName[2] in ['A'..'Z']) then
+    NormName := Copy(NormName, 2, Length(NormName) - 1);
+
+  if (Length(NormName) > 7) and (LowerCase(Copy(NormName, Length(NormName) - 6, 7)) = 'machine') then
+    NormName := Copy(NormName, 1, Length(NormName) - 7);
+
+  LowerName := LowerCase(NormName);
+  FSMPath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'machines' + DirectorySeparator;
+  TargetPath := FSMPath + 'u' + NormName + 'Machine.pas';
+  if FileExists(TargetPath) then
+  begin
+    WriteLn('ERROR: Finite State Machine "u', NormName, 'Machine.pas" already exists!');
+    Halt(1);
+  end;
+
+  ForceDir(FSMPath);
+
+  // Ensure src/machines is in app.cfg
+  AppCfgPath := GetCurrentDir + DirectorySeparator + 'app.cfg';
+  if FileExists(AppCfgPath) then
+  begin
+    CfgContent := ReadFileToString(AppCfgPath);
+    if Pos('-Fusrc/machines', CfgContent) = 0 then
+    begin
+      CfgContent := CfgContent + #10 + '-Fusrc/machines';
+      WriteStringToFile(AppCfgPath, CfgContent);
+    end;
+  end;
+
+  Content :=
+    'unit u' + NormName + 'Machine;' + #10#10 +
+    '{$mode objfpc}{$H+}' + #10#10 +
+    'interface' + #10#10 +
+    'uses' + #10 +
+    '  JS, SysUtils, BVFSM;' + #10#10 +
+    '{ Factory function to create and configure the ' + NormName + ' finite state machine }' + #10 +
+    'function Create' + NormName + 'Machine: TBVStateMachine;' + #10#10 +
+    'implementation' + #10#10 +
+    'function Create' + NormName + 'Machine: TBVStateMachine;' + #10 +
+    'begin' + #10 +
+    '  Result := TBVStateMachine.Create(''' + LowerName + 'Machine'')' + #10 +
+    '    .Initial(''idle'')' + #10 +
+    '    .State(''idle'')' + #10 +
+    '      .On(''START'', ''processing'')' + #10 +
+    '    .State(''processing'')' + #10 +
+    '      .On(''SUCCESS'', ''completed'')' + #10 +
+    '      .On(''FAIL'', ''failed'')' + #10 +
+    '    .State(''completed'')' + #10 +
+    '      .On(''RESET'', ''idle'')' + #10 +
+    '    .State(''failed'')' + #10 +
+    '      .On(''RETRY'', ''processing'')' + #10 +
+    '      .On(''RESET'', ''idle'')' + #10 +
+    '    .Machine;' + #10 +
+    'end;' + #10#10 +
+    'end.' + #10;
+
+  WriteStringToFile(TargetPath, Content);
+  WriteLn('FSM created: src/machines/u', NormName, 'Machine.pas');
+
+  if CreateTest then
+  begin
+    TestPath := GetCurrentDir + DirectorySeparator + 'tests' + DirectorySeparator + 'machines' + DirectorySeparator;
+    TestFile := TestPath + NormName + 'Machine.test.pas';
+    if not FileExists(TestFile) then
+    begin
+      ForceDir(TestPath);
+      TestContent :=
+        'program ' + LowerName + '_machine_test;' + #10#10 +
+        '{$mode objfpc}' + #10#10 +
+        'uses JS, Web, BVTestUtils, SysUtils, BVFSM, u' + NormName + 'Machine;' + #10#10 +
+        'var' + #10 +
+        '  FSM: TBVStateMachine;' + #10#10 +
+        'begin' + #10 +
+        '  Describe(''Finite State Machine: ' + NormName + ''', procedure' + #10 +
+        '    begin' + #10 +
+        '      It(''should start at initial state idle'', procedure' + #10 +
+        '        begin' + #10 +
+        '          FSM := Create' + NormName + 'Machine;' + #10 +
+        '          Expect(FSM.Current).ToBe(''idle'');' + #10 +
+        '        end);' + #10#10 +
+        '      It(''should transition along happy path: idle -> processing -> completed'', procedure' + #10 +
+        '        begin' + #10 +
+        '          Expect(FSM.Send(''START'')).ToBe(True);' + #10 +
+        '          Expect(FSM.Current).ToBe(''processing'');' + #10#10 +
+        '          Expect(FSM.Send(''SUCCESS'')).ToBe(True);' + #10 +
+        '          Expect(FSM.Current).ToBe(''completed'');' + #10 +
+        '        end);' + #10#10 +
+        '      It(''should reset back to idle state'', procedure' + #10 +
+        '        begin' + #10 +
+        '          Expect(FSM.Send(''RESET'')).ToBe(True);' + #10 +
+        '          Expect(FSM.Current).ToBe(''idle'');' + #10 +
+        '        end);' + #10#10 +
+        '      It(''should handle error recovery: processing -> failed -> retry -> processing'', procedure' + #10 +
+        '        begin' + #10 +
+        '          Expect(FSM.Send(''START'')).ToBe(True);' + #10 +
+        '          Expect(FSM.Send(''FAIL'')).ToBe(True);' + #10 +
+        '          Expect(FSM.Current).ToBe(''failed'');' + #10#10 +
+        '          Expect(FSM.Send(''RETRY'')).ToBe(True);' + #10 +
+        '          Expect(FSM.Current).ToBe(''processing'');' + #10 +
+        '        end);' + #10 +
+        '    end);' + #10 +
+        'end.' + #10;
+
+      WriteStringToFile(TestFile, TestContent);
+      WriteLn('Test created: tests/machines/', NormName, 'Machine.test.pas');
+    end;
+  end;
+end;
+
+// =====================================================================
+//  COMMAND: REMOVE FINITE STATE MACHINE
+// =====================================================================
+
+procedure CmdRemoveFSM(const FSMName: string);
+var
+  NormName, TargetPath, TestPath: string;
+begin
+  RequireBlaiseVueProject('bv remove fsm');
+  NormName := FSMName;
+  if (Length(NormName) > 1) and ((NormName[1] = 'u') or (NormName[1] = 'U')) and (NormName[2] in ['A'..'Z']) then
+    NormName := Copy(NormName, 2, Length(NormName) - 1);
+  if (Length(NormName) > 7) and (LowerCase(Copy(NormName, Length(NormName) - 6, 7)) = 'machine') then
+    NormName := Copy(NormName, 1, Length(NormName) - 7);
+
+  TargetPath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'machines' + DirectorySeparator + 'u' + NormName + 'Machine.pas';
+  if FileExists(TargetPath) then
+  begin
+    DeleteFile(TargetPath);
+    WriteLn('Removed: src/machines/u', NormName, 'Machine.pas');
+  end
+  else
+    WriteLn('FSM not found: src/machines/u', NormName, 'Machine.pas');
+
+  TestPath := GetCurrentDir + DirectorySeparator + 'tests' + DirectorySeparator + 'machines' + DirectorySeparator + NormName + 'Machine.test.pas';
+  if FileExists(TestPath) then
+  begin
+    DeleteFile(TestPath);
+    WriteLn('Removed associated test: ', ExtractRelativePath(GetCurrentDir + DirectorySeparator, TestPath));
+  end;
+
+  WriteLn('Finite state machine "', NormName, '" removed.');
+end;
+
+// =====================================================================
 
 //  COMMAND: NEW TEST (Smart Detection)
 
@@ -7674,6 +8011,16 @@ begin
     Path := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'services' + DirectorySeparator;
     SearchKind := 'Services';
   end
+  else if (LKind = 'store') or (LKind = 'stores') then
+  begin
+    Path := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'stores' + DirectorySeparator;
+    SearchKind := 'Store Slices';
+  end
+  else if (LKind = 'fsm') or (LKind = 'fsms') or (LKind = 'machine') or (LKind = 'machines') then
+  begin
+    Path := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'machines' + DirectorySeparator;
+    SearchKind := 'Finite State Machines';
+  end
 
   else if (LKind = 't') or (LKind = 'test') then
   begin
@@ -7683,7 +8030,7 @@ begin
 
   else
   begin
-    WriteLn('Usage: bv list <c|v|s|t|lib>');
+    WriteLn('Usage: bv list <c|v|s|store|fsm|t|lib>');
     Halt(1);
   end;
 
@@ -7714,7 +8061,7 @@ begin
     begin
       repeat
 
-        if (((LKind = 's') or (LKind = 'service') or (LKind = 'services')) and (ExtractFileExt(SR.Name) = '.pas')) or (ExtractFileExt(SR.Name) = '.bv') then
+        if (((LKind = 's') or (LKind = 'service') or (LKind = 'services') or (LKind = 'store') or (LKind = 'stores') or (LKind = 'fsm') or (LKind = 'fsms') or (LKind = 'machine') or (LKind = 'machines')) and (ExtractFileExt(SR.Name) = '.pas')) or (ExtractFileExt(SR.Name) = '.bv') then
         begin
           Inc(Count);
           WriteLn('  [', Count, '] ', SR.Name);
@@ -10244,9 +10591,9 @@ begin
        WriteLn('  - ', RelPath);
 
        {$IFDEF WINDOWS}
-       ExecuteProcess(GetPas2JSPath, '@app.cfg -Fu"' + CorePath + '" -Fu"' + GetPas2JSLibPath + '" -Fu"' + GetCurrentDir + DirectorySeparator + 'generated" -Fu"' + GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'services" -Fu"' + GetCurrentDir + DirectorySeparator + 'src" -Fu"' + ExtractFilePath(TestFiles[i]) + '" "' + TestFiles[i] + '" -o"' + OutFile + '" -O-');
+       ExecuteProcess(GetPas2JSPath, '@app.cfg -Fu"' + CorePath + '" -Fu"' + GetPas2JSLibPath + '" -Fu"' + GetCurrentDir + DirectorySeparator + 'generated" -Fu"' + GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'services" -Fu"' + GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'stores" -Fu"' + GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'machines" -Fu"' + GetCurrentDir + DirectorySeparator + 'src" -Fu"' + ExtractFilePath(TestFiles[i]) + '" "' + TestFiles[i] + '" -o"' + OutFile + '" -O-');
        {$ELSE}
-       ExecuteProcess(GetPas2JSPath, '@app.cfg -Fu' + CorePath + ' -Fu' + GetPas2JSLibPath + ' -Fu' + GetCurrentDir + '/generated -Fu' + GetCurrentDir + '/src/services -Fu' + GetCurrentDir + '/src -Fu' + ExtractFilePath(TestFiles[i]) + ' ' + TestFiles[i] + ' -o' + OutFile + ' -O-');
+       ExecuteProcess(GetPas2JSPath, '@app.cfg -Fu' + CorePath + ' -Fu' + GetPas2JSLibPath + ' -Fu' + GetCurrentDir + '/generated -Fu' + GetCurrentDir + '/src/services -Fu' + GetCurrentDir + '/src/stores -Fu' + GetCurrentDir + '/src/machines -Fu' + GetCurrentDir + '/src -Fu' + ExtractFilePath(TestFiles[i]) + ' ' + TestFiles[i] + ' -o' + OutFile + ' -O-');
        {$ENDIF}
 
        // Add rtl.run() for Vitest to execute the program module code
@@ -22357,6 +22704,160 @@ begin
   if FileExists(GenOldJs) then DeleteFile(GenOldJs);
 end;
 
+{ Renames a BlaiseX store slice across src/stores/ and tests/stores/ (bv rename store). }
+procedure CmdRenameStore(const OldName, NewName: string);
+var
+  OldNorm, NewNorm, OldLower, NewLower: string;
+  StorePath, OldFile, NewFile, Content: string;
+  TestPath, OldTest, NewTest, TestContent: string;
+  GenOldPas, GenOldJs: string;
+begin
+  RequireBlaiseVueProject('bv rename store');
+
+  OldNorm := OldName;
+  if (Length(OldNorm) > 1) and ((OldNorm[1] = 'u') or (OldNorm[1] = 'U')) and (OldNorm[2] in ['A'..'Z']) then
+    OldNorm := Copy(OldNorm, 2, Length(OldNorm) - 1);
+  if (Length(OldNorm) > 5) and (LowerCase(Copy(OldNorm, Length(OldNorm) - 4, 5)) = 'store') then
+    OldNorm := Copy(OldNorm, 1, Length(OldNorm) - 5);
+
+  NewNorm := NewName;
+  if (Length(NewNorm) > 1) and ((NewNorm[1] = 'u') or (NewNorm[1] = 'U')) and (NewNorm[2] in ['A'..'Z']) then
+    NewNorm := Copy(NewNorm, 2, Length(NewNorm) - 1);
+  if (Length(NewNorm) > 5) and (LowerCase(Copy(NewNorm, Length(NewNorm) - 4, 5)) = 'store') then
+    NewNorm := Copy(NewNorm, 1, Length(NewNorm) - 5);
+
+  OldLower := LowerCase(OldNorm);
+  NewLower := LowerCase(NewNorm);
+
+  StorePath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'stores' + DirectorySeparator;
+  OldFile := StorePath + 'u' + OldNorm + 'Store.pas';
+  NewFile := StorePath + 'u' + NewNorm + 'Store.pas';
+
+  if not FileExists(OldFile) then
+  begin
+    WriteLn('[ERROR] Store "u', OldNorm, 'Store.pas" not found in src/stores/');
+    Exit;
+  end;
+
+  if FileExists(NewFile) then
+  begin
+    WriteLn('[ERROR] Destination store "u', NewNorm, 'Store.pas" already exists!');
+    Exit;
+  end;
+
+  Content := ReadFileToString(OldFile);
+  Content := StringReplace(Content, 'unit u' + OldNorm + 'Store;', 'unit u' + NewNorm + 'Store;', [rfIgnoreCase]);
+  Content := StringReplace(Content, 'Init' + OldNorm + 'Store', 'Init' + NewNorm + 'Store', [rfReplaceAll]);
+  Content := StringReplace(Content, 'DefineStore(''' + OldLower + '''', 'DefineStore(''' + NewLower + '''', [rfReplaceAll]);
+  Content := StringReplace(Content, '''' + OldLower + '''', '''' + NewLower + '''', [rfReplaceAll]);
+  Content := StringReplace(Content, OldNorm + ' store slice', NewNorm + ' store slice', [rfReplaceAll]);
+  Content := StringReplace(Content, OldNorm + ' Store', NewNorm + ' Store', [rfReplaceAll]);
+  WriteStringToFile(NewFile, Content);
+  DeleteFile(OldFile);
+  WriteLn('Store renamed: src/stores/u', OldNorm, 'Store.pas -> src/stores/u', NewNorm, 'Store.pas');
+
+  // Associated Test
+  TestPath := GetCurrentDir + DirectorySeparator + 'tests' + DirectorySeparator + 'stores' + DirectorySeparator;
+  OldTest := TestPath + OldNorm + 'Store.test.pas';
+  NewTest := TestPath + NewNorm + 'Store.test.pas';
+  if FileExists(OldTest) then
+  begin
+    TestContent := ReadFileToString(OldTest);
+    TestContent := StringReplace(TestContent, 'program ' + OldLower + '_store_test;', 'program ' + NewLower + '_store_test;', [rfIgnoreCase]);
+    TestContent := StringReplace(TestContent, 'u' + OldNorm + 'Store', 'u' + NewNorm + 'Store', [rfReplaceAll]);
+    TestContent := StringReplace(TestContent, 'Store Slice: ' + OldNorm, 'Store Slice: ' + NewNorm, [rfReplaceAll]);
+    TestContent := StringReplace(TestContent, 'GetStore(''' + OldLower + ''')', 'GetStore(''' + NewLower + ''')', [rfReplaceAll]);
+    WriteStringToFile(NewTest, TestContent);
+    DeleteFile(OldTest);
+    WriteLn('Test renamed: tests/stores/', OldNorm, 'Store.test.pas -> tests/stores/', NewNorm, 'Store.test.pas');
+  end;
+
+  // Clean stale generated artifacts
+  GenOldPas := GetCurrentDir + DirectorySeparator + 'generated' + DirectorySeparator + 'stores' + DirectorySeparator + 'u' + OldNorm + 'Store.pas';
+  if FileExists(GenOldPas) then DeleteFile(GenOldPas);
+  GenOldJs := GetCurrentDir + DirectorySeparator + 'generated' + DirectorySeparator + 'tests' + DirectorySeparator + 'stores' + DirectorySeparator + OldNorm + 'Store.test.js';
+  if FileExists(GenOldJs) then DeleteFile(GenOldJs);
+end;
+
+{ Renames a finite state machine across src/machines/ and tests/machines/ (bv rename fsm). }
+procedure CmdRenameFSM(const OldName, NewName: string);
+var
+  OldNorm, NewNorm, OldLower, NewLower: string;
+  FSMPath, OldFile, NewFile, Content: string;
+  TestPath, OldTest, NewTest, TestContent: string;
+  GenOldPas, GenOldJs: string;
+begin
+  RequireBlaiseVueProject('bv rename fsm');
+
+  OldNorm := OldName;
+  if (Length(OldNorm) > 1) and ((OldNorm[1] = 'u') or (OldNorm[1] = 'U')) and (OldNorm[2] in ['A'..'Z']) then
+    OldNorm := Copy(OldNorm, 2, Length(OldNorm) - 1);
+  if (Length(OldNorm) > 7) and (LowerCase(Copy(OldNorm, Length(OldNorm) - 6, 7)) = 'machine') then
+    OldNorm := Copy(OldNorm, 1, Length(OldNorm) - 7);
+  if (Length(OldNorm) > 3) and (LowerCase(Copy(OldNorm, Length(OldNorm) - 2, 3)) = 'fsm') then
+    OldNorm := Copy(OldNorm, 1, Length(OldNorm) - 3);
+
+  NewNorm := NewName;
+  if (Length(NewNorm) > 1) and ((NewNorm[1] = 'u') or (NewNorm[1] = 'U')) and (NewNorm[2] in ['A'..'Z']) then
+    NewNorm := Copy(NewNorm, 2, Length(NewNorm) - 1);
+  if (Length(NewNorm) > 7) and (LowerCase(Copy(NewNorm, Length(NewNorm) - 6, 7)) = 'machine') then
+    NewNorm := Copy(NewNorm, 1, Length(NewNorm) - 7);
+  if (Length(NewNorm) > 3) and (LowerCase(Copy(NewNorm, Length(NewNorm) - 2, 3)) = 'fsm') then
+    NewNorm := Copy(NewNorm, 1, Length(NewNorm) - 3);
+
+  OldLower := LowerCase(OldNorm);
+  NewLower := LowerCase(NewNorm);
+
+  FSMPath := GetCurrentDir + DirectorySeparator + 'src' + DirectorySeparator + 'machines' + DirectorySeparator;
+  OldFile := FSMPath + 'u' + OldNorm + 'Machine.pas';
+  NewFile := FSMPath + 'u' + NewNorm + 'Machine.pas';
+
+  if not FileExists(OldFile) then
+  begin
+    WriteLn('[ERROR] Finite State Machine "u', OldNorm, 'Machine.pas" not found in src/machines/');
+    Exit;
+  end;
+
+  if FileExists(NewFile) then
+  begin
+    WriteLn('[ERROR] Destination FSM "u', NewNorm, 'Machine.pas" already exists!');
+    Exit;
+  end;
+
+  Content := ReadFileToString(OldFile);
+  Content := StringReplace(Content, 'unit u' + OldNorm + 'Machine;', 'unit u' + NewNorm + 'Machine;', [rfIgnoreCase]);
+  Content := StringReplace(Content, 'Create' + OldNorm + 'Machine', 'Create' + NewNorm + 'Machine', [rfReplaceAll]);
+  Content := StringReplace(Content, 'TBVStateMachine.Create(''' + OldLower + 'Machine'')', 'TBVStateMachine.Create(''' + NewLower + 'Machine'')', [rfReplaceAll]);
+  Content := StringReplace(Content, 'TBVStateMachine.Create(''' + OldNorm + ''')', 'TBVStateMachine.Create(''' + NewNorm + ''')', [rfReplaceAll]);
+  Content := StringReplace(Content, '''' + OldLower + 'Machine''', '''' + NewLower + 'Machine''', [rfReplaceAll]);
+  Content := StringReplace(Content, OldNorm + ' finite state machine', NewNorm + ' finite state machine', [rfReplaceAll]);
+  WriteStringToFile(NewFile, Content);
+  DeleteFile(OldFile);
+  WriteLn('FSM renamed: src/machines/u', OldNorm, 'Machine.pas -> src/machines/u', NewNorm, 'Machine.pas');
+
+  // Associated Test
+  TestPath := GetCurrentDir + DirectorySeparator + 'tests' + DirectorySeparator + 'machines' + DirectorySeparator;
+  OldTest := TestPath + OldNorm + 'Machine.test.pas';
+  NewTest := TestPath + NewNorm + 'Machine.test.pas';
+  if FileExists(OldTest) then
+  begin
+    TestContent := ReadFileToString(OldTest);
+    TestContent := StringReplace(TestContent, 'program ' + OldLower + '_machine_test;', 'program ' + NewLower + '_machine_test;', [rfIgnoreCase]);
+    TestContent := StringReplace(TestContent, 'u' + OldNorm + 'Machine', 'u' + NewNorm + 'Machine', [rfReplaceAll]);
+    TestContent := StringReplace(TestContent, 'Create' + OldNorm + 'Machine', 'Create' + NewNorm + 'Machine', [rfReplaceAll]);
+    TestContent := StringReplace(TestContent, 'Finite State Machine: ' + OldNorm, 'Finite State Machine: ' + NewNorm, [rfReplaceAll]);
+    WriteStringToFile(NewTest, TestContent);
+    DeleteFile(OldTest);
+    WriteLn('Test renamed: tests/machines/', OldNorm, 'Machine.test.pas -> tests/machines/', NewNorm, 'Machine.test.pas');
+  end;
+
+  // Clean stale generated artifacts
+  GenOldPas := GetCurrentDir + DirectorySeparator + 'generated' + DirectorySeparator + 'machines' + DirectorySeparator + 'u' + OldNorm + 'Machine.pas';
+  if FileExists(GenOldPas) then DeleteFile(GenOldPas);
+  GenOldJs := GetCurrentDir + DirectorySeparator + 'generated' + DirectorySeparator + 'tests' + DirectorySeparator + 'machines' + DirectorySeparator + OldNorm + 'Machine.test.js';
+  if FileExists(GenOldJs) then DeleteFile(GenOldJs);
+end;
+
 { Renames a project in its configuration, folders, and global registry (bv rename p). }
 procedure CmdRenameProject(const NewProjectName: string; out RenamedName: string); forward;
 
@@ -23664,6 +24165,8 @@ begin
     Result.Add('c');
     Result.Add('v');
     Result.Add('s');
+    Result.Add('store');
+    Result.Add('fsm');
     Result.Add('t');
     Result.Add('component');
     Result.Add('view');
@@ -23675,6 +24178,8 @@ begin
     Result.Add('c');
     Result.Add('v');
     Result.Add('s');
+    Result.Add('store');
+    Result.Add('fsm');
     Result.Add('t');
     Result.Add('lib');
   end
@@ -23683,6 +24188,8 @@ begin
     Result.Add('c');
     Result.Add('v');
     Result.Add('s');
+    Result.Add('store');
+    Result.Add('fsm');
     Result.Add('p');
   end
   else if Cmd = 'project' then
@@ -23790,6 +24297,8 @@ begin
       '   c <Name>                   Scaffolds a component (.bv) & test in tests/components/' + LineEnding +
       '   v <Name>                   Scaffolds a route view (.bv) & test in tests/views/' + LineEnding +
       '   s <Name>                   Scaffolds a pure Pascal domain service in src/services/' + LineEnding +
+       '   store <Name>               Scaffolds a BlaiseX store slice & test in src/stores/' + LineEnding +
+       '   fsm <Name>                 Scaffolds a finite state machine & test in src/machines/' + LineEnding +
       '   t <Name>                   Scaffolds a Pascal test file (.test.pas)'
   else if Cmd = 'remove' then
     Result :=
@@ -23797,6 +24306,8 @@ begin
       '   c <Name>                   Safely deletes a component and its unit test' + LineEnding +
       '   v <Name>                   Safely deletes a view and its unit test' + LineEnding +
       '   s <Name>                   Safely deletes a domain service from src/services/' + LineEnding +
+       '   store <Name>               Safely deletes a store slice and its unit test' + LineEnding +
+       '   fsm <Name>                 Safely deletes a finite state machine and its unit test' + LineEnding +
       '   t <Name>                   Safely deletes a test file'
   else if Cmd = 'list' then
     Result :=
@@ -23804,6 +24315,8 @@ begin
       '   c                          Lists all project components' + LineEnding +
       '   v                          Lists all route views' + LineEnding +
       '   s                          Lists all domain services' + LineEnding +
+       '   store                      Lists all BlaiseX store slices' + LineEnding +
+       '   fsm                        Lists all finite state machines' + LineEnding +
       '   t                          Lists all test files' + LineEnding +
       '   lib                        Lists all installed packages'
   else if Cmd = 'rename' then
@@ -23812,6 +24325,8 @@ begin
       '   c <Old> <New>              Smart renames a component and updates references' + LineEnding +
       '   v <Old> <New>              Smart renames a route view and updates router' + LineEnding +
       '   s <Old> <New>              Smart renames a domain service' + LineEnding +
+      '   store <Old> <New>          Smart renames a BlaiseX store slice and test' + LineEnding +
+      '   fsm <Old> <New>            Smart renames a finite state machine and test' + LineEnding +
       '   p <NewName>                Renames the entire project and syncs Lazarus/Capacitor'
   else if Cmd = 'project' then
     Result :=
@@ -24555,8 +25070,10 @@ begin
         WriteLn('  g c <Name>                 Scaffolds a component (.bv) & test in tests/components/ (alias: new c)');
         WriteLn('  g v <Name>                 Scaffolds a route view (.bv) & test in tests/views/ (alias: new v)');
         WriteLn('  g s <Name>                 Scaffolds a pure Pascal domain service in src/services/ (alias: new s)');
+        WriteLn('  g store <Name>             Scaffolds a BlaiseX store slice & test in src/stores/ (alias: new store)');
+        WriteLn('  g fsm <Name>               Scaffolds a finite state machine & test in src/machines/ (alias: new fsm)');
         WriteLn('  g t <Name>                 Scaffolds a Pascal test file (.test.pas) (alias: new t)');
-        WriteLn('  remove <c|v|s|t> <Name>    Safely deletes a component, view, service, or test');
+        WriteLn('  remove <c|v|s|store|fsm|t> Safely deletes a component, view, service, store, FSM, or test');
         WriteLn('  list <c|v|s|t|lib>         Lists project components, views, services, tests, or installed libs');
         WriteLn('  rename <c|v|s|p>           Smart rename for services, components, views, or project name');
         WriteLn('');
@@ -26217,10 +26734,12 @@ begin
   WriteLn('  bv g c <Name>              Scaffolds a component (.bv) & test in tests/components/ (alias: bv new c)');
   WriteLn('  bv g v <Name>              Scaffolds a route view (.bv) & test in tests/views/ (alias: bv new v)');
   WriteLn('  bv g s <Name>              Scaffolds a pure Pascal domain service in src/services/ (alias: bv new s)');
+  WriteLn('  bv g store <Name>          Scaffolds a BlaiseX store slice & test in src/stores/ (alias: bv new store)');
+  WriteLn('  bv g fsm <Name>            Scaffolds a finite state machine & test in src/machines/ (alias: bv new fsm)');
   WriteLn('  bv g t <Name>              Scaffolds a Pascal test file (.test.pas) (alias: bv new t)');
-  WriteLn('  bv remove <c|v|s|t> <Name> Safely deletes a component, view, service, or test');
-  WriteLn('  bv list <c|v|s|t|lib>      Lists project components, views, services, tests, or installed libs');
-  WriteLn('  bv rename <c|v|s|p>        Smart rename for services, components, views, or project name');
+  WriteLn('  bv remove <c|v|s|store|fsm|t> Safely deletes a component, view, service, store, FSM, or test');
+  WriteLn('  bv list <c|v|s|store|fsm|t|lib> Lists project components, views, services, stores, FSMs, tests, or installed libs');
+  WriteLn('  bv rename <c|v|s|store|fsm|p> Smart rename for services, components, views, stores, FSMs, or project name');
   WriteLn('');
   WriteLn('  # === Workspace & Project Cockpit ===');
   WriteLn('  bv files [path] [--all]    Displays structured project files tree');
@@ -26437,13 +26956,15 @@ begin
       CmdNewView(NameArg, not SkipTest)
     else if (TypeArg = 's') or (TypeArg = 'service') or (TypeArg = 'serv') then
       CmdNewService(NameArg, not SkipTest)
-
+    else if (TypeArg = 'store') or (TypeArg = 'st') or (TypeArg = 'slice') then
+      CmdNewStore(NameArg, not SkipTest)
+    else if (TypeArg = 'fsm') or (TypeArg = 'machine') or (TypeArg = 'state') then
+      CmdNewFSM(NameArg, not SkipTest)
     else if (TypeArg = 't') or (TypeArg = 'test') then
       CmdNewTest(NameArg)
-
     else
     begin
-      WriteLn('Unknown type: ', ParamStr(2), '. Use "component" (c), "view" (v), "service" (s) or "test" (t).');
+      WriteLn('Unknown type: ', ParamStr(2), '. Use "c", "v", "s", "store", "fsm", or "t".');
       Halt(1);
     end;
   end
@@ -26484,6 +27005,10 @@ begin
       CmdRemoveView(NameArg)
     else if (TypeArg = 's') or (TypeArg = 'service') or (TypeArg = 'serv') then
       CmdRemoveService(NameArg)
+    else if (TypeArg = 'store') or (TypeArg = 'st') or (TypeArg = 'slice') then
+      CmdRemoveStore(NameArg)
+    else if (TypeArg = 'fsm') or (TypeArg = 'machine') or (TypeArg = 'state') then
+      CmdRemoveFSM(NameArg)
     else if (TypeArg = 't') or (TypeArg = 'test') then
       CmdRemoveTest(NameArg)
     else if (TypeArg = 'lib') or (TypeArg = 'l') then
@@ -26512,7 +27037,7 @@ begin
   begin
     if (ParamCount < 2) then
     begin
-      WriteLn('Usage: bv list <c|v|t|lib>');
+      WriteLn('Usage: bv list <c|v|s|store|fsm|t|lib>');
       Halt(1);
     end;
 
@@ -26832,12 +27357,14 @@ begin
   begin
     if ParamCount < 3 then
     begin
-      WriteLn('Usage: bv rename <c|v|s|project> <OldName> [NewName]');
-      WriteLn('Types: component (c), view (v), service (s), project (p)');
+      WriteLn('Usage: bv rename <c|v|s|store|fsm|project> <OldName> [NewName]');
+      WriteLn('Types: component (c), view (v), service (s), store, fsm, project (p)');
       WriteLn('Examples:');
       WriteLn('  bv rename s CalculadoraFrete CalculoLogistica');
       WriteLn('  bv rename c ProductCard ItemCard');
       WriteLn('  bv rename v OrderHistory MyOrders');
+      WriteLn('  bv rename store Cart ShoppingCart');
+      WriteLn('  bv rename fsm OrderFlow CheckoutFlow');
       WriteLn('  bv rename project meu-novo-app');
       Halt(1);
     end;
@@ -26850,7 +27377,7 @@ begin
     begin
       if ParamCount < 4 then
       begin
-        WriteLn('Usage: bv rename <c|v|s> <OldName> <NewName>');
+        WriteLn('Usage: bv rename <c|v|s|store|fsm> <OldName> <NewName>');
         Halt(1);
       end;
       NameArg := ParamStr(3);
@@ -26860,9 +27387,13 @@ begin
         CmdRenameComponent(NameArg, ParamStr(4))
       else if (TypeArg = 'v') or (TypeArg = 'view') then
         CmdRenameView(NameArg, ParamStr(4))
+      else if (TypeArg = 'store') or (TypeArg = 'stores') then
+        CmdRenameStore(NameArg, ParamStr(4))
+      else if (TypeArg = 'fsm') or (TypeArg = 'fsms') or (TypeArg = 'machine') or (TypeArg = 'machines') then
+        CmdRenameFSM(NameArg, ParamStr(4))
       else
       begin
-        WriteLn('Unknown type: ', ParamStr(2), '. Use "service" (s), "component" (c), "view" (v) or "project" (p).');
+        WriteLn('Unknown type: ', ParamStr(2), '. Use "service" (s), "component" (c), "view" (v), "store", "fsm" or "project" (p).');
         Halt(1);
       end;
     end;

@@ -17,43 +17,19 @@
 
 ---
 
-## 🌟 Version 4.0 - 4.4: The Enterprise Universal Release
+## 💡 Why BlaiseVue?
 
-BlaiseVue 4.0 - 4.4 represents an enterprise generational milestone, delivering full-stack mORMot 2 integration, native mobile and desktop suites, interactive developer cockpit, zero-ASM pure Object Pascal DX, compile-time template verification, and offline-first dataset synchronization:
+The Pascal ecosystem (Delphi and Lazarus) powers **tens of billions of dollars** in enterprise software globally. It underpins critical banking infrastructure, industrial manufacturing ERPs, hospital automation systems, retail point-of-sale (POS) terminals, and mission-critical electronic invoicing across Brazil and worldwide.
 
-- **⚡ Compiler Template Type-Checking & Zero-`with()` Native Templates (v4.4)**: Recursive-descent AST evaluator (`bv.fastEval`) with LRU caching, strict CSP compliance, and compile-time AST verification with Levenshtein typo suggestions (`bv check`).
-- **💾 Offline-First `TBVDataSet` & Delta Sync (v4.4)**: High-capacity IndexedDB persistence with transactional delta tracking (`FDelta`), server ID reconciliation, and automated reconnect triggers for mORMot 2 (`ApplyUpdates`).
-- **🔗 Relational Master-Detail CRUD & Multi-Database ORM (v4.4)**: Automated relational model generation (`bv mormot crud`) with foreign keys, nested views, and pluggable database support (`--db sqlite|postgres|mysql|firebird` or `.env`).
-- **🏎️ High-Performance Virtual Scrolling (v4.4)**: DOM virtualization engine (`<bv-virtual-scroll>`) rendering 100,000+ records at a constant 60 FPS in `<bv-data-grid>`.
-- **📦 Standalone Library Scaffolding & Packaging (v4.4)**: Dedicated library generator (`bv create --lib`) with interactive license selection (MIT, Apache, LGPL), isolated HMR playground, autonomous test suite, and release packager (`bv lib pack`).
-- **🛡️ Project Metadata, Licensing Suite & Clean Slate Reset (v4.4)**: Automated licensing (`bv license`), SemVer bumping (`bv meta bump`), Pascal unit sync (`src/uAppVersion.pas`), and clean slate project reset (`bv reset`) with double-layered safety guards.
-- **🛡️ End-to-End Type-Safe Pascal RPC with mORMot 2 (v4.3)**: Shared service interfaces (`ICustomerService`), automated client proxy generation (`bv mormot rpc`), dual HTTP/WebSocket transport, JSON-RPC 2.0, and 100% compile-time API validation in pure Object Pascal.
-- **📊 LiveBindings & Reactive `TBVDataSet` (v4.2)**: Delphi/Lazarus data-aware semantics in modern reactive Web applications. Features in-memory cursor navigation (`First`, `Next`, `Prior`, `Last`, `RecNo`), transactional buffering (`Append`, `Edit`, `Post`, `Cancel`, `Delete`), strongly typed fields (`AsString`, `AsInteger`, `AsFloat`, `AsBoolean`), two-way `b-field` directive, offline delta tracking (`FDelta`, `GetDeltaJSON`), and native `<bv-datagrid :dataset="myDS">` integration.
-- **📚 Official Package Catalog & Documentation (v4.1)**: Master catalog covering 53+ production components across `@blaise-ui`, `@blaise-charts`, `@blaise-ui-mobile`, and `@blaise-themes`.
-- **💎 Idiomatic Object Pascal DX & Zero-ASM Architecture**: 100% pure Pascal application layer powered by `BVPascalDX.pas`. Application views and components run without inline `asm ... end;` blocks, providing type-safe reactive mutations, high-level dialogs (`ShowToast`, `Confirm`), full-stack REST/mORMot CRUD helpers (`ApiFetch`, `ApiSave`, `ApiDelete`, `ApiSetupRealtime`), and native auth/mobile/Wasm bindings.
-- **⚡ WebAssembly Acceleration Engine (`BVWasm` / `$wasm`)**: Execute compute-intensive algorithms in the browser with near-native binary speed (2x to 10x faster than pure JavaScript) via `$wasm.call('math', 'fib', 15)` and automated benchmarks (`bv wasm benchmark`).
-- **📚 Automatic Documentation Generator & Playground (`bv doc`)**: Zero-configuration Storybook/VuePress-like interactive catalog generator analyzing component AST, props, slots, and events, served directly via `bv doc --serve`.
-- **🚀 SSG & Static Pre-rendering (`bv run ssg`)**: Pre-renders routing trees into static HTML for instant First Contentful Paint (<50ms) and complete search engine indexing (SEO).
-- **🌊 Zero-Flicker Reactive Hydration**: Seamlessly adopts pre-rendered SSG DOM markup without clearing `#app`, attaching event listeners and reactive proxies with zero layout shifts.
-- **🧪 Headless End-to-End Test Suite (`bv test e2e`)**: Validates complete user journeys across routing, forms, theme switches, and hydration (130 automated tests passing across 12 test suites).
-- **📋 Reactive Form Validation Engine (`b-validate`)**: Declarative client-side validation rules (`required`, `email`, `min:N`, `max:N`, `numeric`, `pattern`), reactive error tracking (`$errors`), touch states (`$v`), and programmatic validation (`$validate()`).
-- **🎬 FLIP List Transitions (`<transition-group>`)**: High-performance collection animations powered by the First-Last-Invert-Play (FLIP) algorithm, custom wrapper tags (`tag="ul"`), and smooth reordering via `.bv-move`.
-- **🌐 Native Internationalization (`Blaise-i18n`)**: Embedded multi-locale translation engine with `$t(key, params)`, reactive locale switching (`$setLocale(code)`), and fallback resolution.
-- **🎨 Official Themes Package (`packages/core/blaise-themes`)**: 9 integrated Bootswatch themes (`flatly`, `darkly`, `cosmo`, `cyborg`, `lux`, `pulse`, `solar`, `vapor`, `zephyr`), dynamic stylesheet swapping, dark mode toggle (`data-bs-theme`), and ready-to-use `<bv-theme-toggle>` and `<bv-theme-select>` components.
-- **🔤 Official Icons Package (`packages/core/blaise-icons`)**: Full integration with 2,000+ Bootstrap Icons via `<bv-icon name="..." size="..." color="...">` with zero runtime bloat.
-- **⚡ Hot Module Replacement (HMR)**: Instant component recompilation and in-place DOM patching via WebSockets (`:8081`) while preserving active reactive state (`this['State']`).
-- **🛣️ Advanced SPA Routing**: Clean URLs via **HTML5 History API**, recursive **Nested Routes** with `<router-view>`, dynamic route parameters (`:id`), and **Navigation Guards** (`beforeEach`, `beforeEnter`, `afterEach`).
-- **🧩 Scoped Slots & Templates**: Seamless two-way data passing from child components back to parent templates (`#name="slotProps"`, `b-slot`, `slot-scope`).
-- **🚀 Teleport & Suspense**: Mount elements into remote DOM targets (`<teleport to="body">`) and orchestrate asynchronous dependencies (`<suspense>`).
-- **🏎️ Static Hoisting & Compiler Pruning**: Compiler-level static analysis tags invariant nodes (`bvStatic = true`), bypassing diff comparisons for $O(1)$ reconciliation.
-- **📱 Hybrid Mobile Platform (Capacitor & Android .apk)**: Native mobile runtime targeting Android and iOS with native APK generation via `bv mobile build`.
-- **📐 Responsive Grid System (`<bv-container>`, `<bv-row>`, `<bv-col>`)**: Fluid 12-column grid layout with Bootstrap-compatible breakpoints (`cols`, `sm`, `md`, `lg`, `xl`) and gutter controls.
-- **🧭 Mobile Bottom Navigation & Drawer**: Bottom-pinned mobile navigation (`<bv-bottom-nav>`, `<bv-bottom-nav-item>`) and off-canvas drawer (`<bv-drawer>`).
-- **🛠️ VS Code Official Extension (`.vsix`)**: Triple syntax highlighting for `.bv`, directive autocompletion, BlaiseUI IntelliSense, and snippets (`bv extension install vscode`, `bv extension pack vscode`).
-- **🛡️ Lazarus IDE Official Package (`blaisevue_ide.lpk`)**: Native design-time package for Lazarus IDE with `.bv` multi-syntax highlighting (HTML + Pascal + CSS), File -> New component and view wizards, Tools menu AST diagnostics, and `bv lazarus init` project generation.
-- **🔍 Browser DevTools Extension**: Manifest V3 DevTools extension for Chrome, Edge, and Firefox supporting real-time component inspection, reactive state debugging, and WebSocket HMR monitoring (`bv extension install devtools`).
-- **🌐 Decentralized Package Ecosystem & Registries**: Enterprise package manager with multi-registry catalogs (`bv repo`), SemVer pinning, global offline cache (`~/.blaisevue/packages/`), `<repo>:<package>` disambiguation, and core reserved names protection.
-- **📦 BlaiseUI Official Component Kit**: Over 25 production-ready UI widgets (`bv-btn`, `bv-card`, `bv-input`, `bv-modal`, `bv-datagrid`, `bv-toast`, `bv-accordion`, `bv-container`, `bv-row`, `bv-col`, `bv-drawer`, `bv-bottom-nav`) styled with clean modern CSS.
+For more than 15 years, these organizations have faced the exact same dramatic dilemma:
+
+> *"We need to modernize our ERPs and enterprise systems for the Web, Cloud, and Mobile, but we cannot afford to throw away 20 years of battle-tested Pascal business logic, rewrite everything from scratch, and re-hire an entire team of React/TypeScript or Flutter engineers."*
+
+**BlaiseVue was engineered specifically to solve this dilemma.**
+
+It provides a modern, reactive component model (inspired by Vue.js) written **100% in Object Pascal**. You preserve your business logic, database datasets, and team expertise while compiling directly to ultra-fast, single-page web applications (SPA/SSG), native Android/iOS mobile apps via Capacitor, and lightweight desktop binaries.
+
+If this dilemma sounds familiar to you, **then you should consider BlaiseVue.**
 
 ---
 
@@ -71,130 +47,7 @@ BlaiseVue features a modular package architecture located in `/packages`:
 | **`blaise-studio`** | Developer cockpit & live WebSocket hub | Visual AST inspector, real-time WebSocket monitor, 1-click test/build runner, `TBVStudioClient` |
 | **`blaise-ui-mobile`** | Mobile-first Ionic components & Pascal wrappers | `<bv-ion-app>`, `<bv-ion-toolbar>`, iOS/Android adaptive themes, `TIonicToast`, `TIonicAlert` |
 
-Install packages directly into your project via the CLI:
-```bash
-bv lib install themes   # Installs Bootswatch themes and switcher components
-bv lib install icons    # Installs Bootstrap Icons fonts and stylesheets
-bv lib install ui       # Installs the complete BlaiseUI component suite
-bv lib install mobile   # Installs Ionic mobile components and Pascal controllers
-bv lib install charts   # Installs Chart.js data visualization suite
-```
-
 ---
-
-## 🛠️ CLI Quick Reference (`bv.exe`)
-
-The BlaiseVue CLI is a single, zero-dependency native executable compiled with Free Pascal.
-
-```bash
-  BlaiseVue CLI v4.4.0 (Universal Pascal Full-Stack Platform)
-  ============================================================
-  Usage: bv <command> [options]
-
-  # === Scaffolding & Generators ===
-  bv create <name>           Scaffolds a new project with 4-tier testing hierarchy & domain services
-  bv g c <Name>              Scaffolds a component (.bv) & test in tests/components/ (alias: bv new c)
-  bv g v <Name>              Scaffolds a route view (.bv) & test in tests/views/ (alias: bv new v)
-  bv g s <Name>              Scaffolds a pure Pascal domain service in src/services/ (alias: bv new s)
-  bv g t <Name>              Scaffolds a Pascal test file (.test.pas) (alias: bv new t)
-  bv remove <c|v|s|t> <Name> Safely deletes a component, view, service, or test
-  bv list <c|v|s|t|lib>      Lists project components, views, services, tests, or installed libs
-  bv rename <c|v|s|p>        Smart rename for services, components, views, or project name
-
-  # === Workspace & Project Cockpit ===
-  bv files [path] [--all]    Displays structured project files tree with architecture roles
-  bv clear                   Clears terminal screen & refreshes header
-  bv enter                   Enters interactive project Cockpit shell with [TAB] autocomplete & history
-  bv use <project-name>      Jumps into registered project Cockpit shell from anywhere
-  bv project add             Registers current project into global registry
-  bv project list            Lists registered projects (* active)
-  bv project current         Shows active project details
-  bv project remove <name>   Unregisters a project from global registry
-
-  # === Development & Frontend Build ===
-  bv dev                     Builds project in dev mode & starts dev server with HMR on http://localhost:8080
-  bv build                   Compiles frontend in development/debug mode (Lazarus & watchers)
-  bv build --release         Builds optimized production bundle with hashes in dist/
-  bv preview                 Local HTTP preview of production build (port 5000)
-  bv ssg                     Pre-renders all routes into static HTML (SSG)
-  bv wasm <info|benchmark>   WebAssembly acceleration and performance benchmarks
-  bv check [file]            Validates component templates against script declarations (AST Type-Checker)
-  bv clean                   Cleans generated build files (generated/ and dist/)
-
-  # === Backend & Full-Stack (Synopse mORMot 2) ===
-  bv mormot init             Scaffolds mORMot 2 backend server in server/
-  bv mormot run [--release] [--fresh] [--port <p>] Starts native backend server (--fresh kills lingering instances)
-  bv mormot build [--release] Compiles native server binary with Free Pascal (-O2 debug / -O3 release)
-  bv mormot kill [--port <p>] Terminates lingering server.exe instances & verifies port release
-  bv mormot status           Queries running mORMot 2 health endpoint (/api/status)
-  bv mormot deploy [--zip]   Assembles standalone production bundle in deploy/
-  bv mormot crud <Model>     Scaffolds full-stack ORM model, REST API & reactive DataGrid
-  bv mormot auth             Scaffolds JWT authentication, AuthService, LoginView & route guards
-  bv mormot docs | swagger   Generates interactive OpenAPI 3.0 & Swagger UI explorer (/api/docs)
-  bv mormot docker [--build] Scaffolds sub-20MB Alpine micro-container & docker-compose.yml
-  bv mormot rpc              Scaffolds type-safe Pascal RPC client proxies from SOA interfaces
-
-  # === Mobile (Android & iOS via Capacitor) ===
-  bv mobile init [name] [id] [--version=<v>] Scaffolds Capacitor & mobile/ native project
-  bv mobile upgrade [--check] Migrates Capacitor dependencies & updates Gradle
-  bv mobile sync             Syncs dist/ with native mobile assets
-  bv mobile remove [-y]      Safely deletes mobile/ and capacitor.config.json
-  bv mobile build android    Builds native Android Debug APK in mobile/bin/android/
-  bv mobile build android --release Builds optimized Release APK (R8/ProGuard)
-  bv mobile build android --bundle Builds Google Play Android App Bundle (.aab)
-  bv mobile emulator list    Lists installed Android Virtual Devices (AVD)
-  bv mobile emulator start   Boots Android emulator in background
-  bv mobile emulator kill    Terminates lingering emulator & QEMU processes (alias: bv mobile kill)
-  bv mobile run android      Installs and launches APK on connected USB device
-  bv mobile run android --emulator [--release] [--fresh] Boots emulator, compiles & launches app (flags can be combined)
-  bv mobile open android     Opens project in Android Studio
-
-  # === Desktop (Free Pascal, Lazarus IDE & WebUI) ===
-  bv desktop init [name]     Scaffolds Lazarus (.lpi, .lpr) & WebUI project
-  bv desktop sync            Syncs dist/ with desktop/assets/
-  bv desktop remove [-y]     Safely deletes desktop/ native project
-  bv desktop build [target]  Compiles Debug native binary (live console logging)
-  bv desktop build [target] --release Compiles Release native binary (pure GUI - NO console)
-  bv desktop run [target]    Launches desktop app in Debug mode (with console)
-  bv desktop run [target] --release Launches desktop app in Release mode (clean GUI)
-
-  # === Testing & Docs ===
-  bv test                    Compiles and runs all unit tests (.test.pas) with Vitest
-  bv test e2e                Runs headless browser End-to-End integration test suite
-  bv doc [--serve]           Generates interactive component documentation & playground
-  bv studio                  Launches BlaiseVue Studio developer dashboard (port 9000)
-
-  # === Package & Theme Management ===
-  bv repo <list|add|remove|default|sync|search> Manages package repositories & ecosystem sources
-  bv lib install [<repo>:]<pkg[@ver]|url> [--global|-g] Installs package in project /lib or user cache
-  bv lib remove <name> [--global|-g] Removes package from lib/ or global cache
-  bv lib update [[<repo>:]name] [--global|-g] Updates package(s) to latest version
-  bv lib outdated [--global|-g] Checks for available updates in installed packages
-  bv lib list [--global|-g]  Lists installed libraries
-  bv lib search [[<repo>:]term] Searches packages in registered repositories
-  bv lib pack [dir]          Assembles & verifies release artifact (.zip with SHA-256)
-  bv theme [list]            Displays active and available themes in @blaise-themes
-  bv theme add <name>        Adds a theme to package.json for optimized bundling
-  bv theme remove <name>     Removes a theme from package.json
-  bv theme use <name>        Sets active default theme in package.json & index.html
-  bv theme reset             Resets theme filters (bundles all themes in compatibility mode)
-  bv extension <list|install|remove|pack> [target] Manages development extensions & tools
-
-  # === Project Configuration & Search Paths ===
-  bv license [list|show|set] Manages project license (MIT, Apache, LGPL, GPL, BSD, etc.)
-  bv meta [show|get|set|bump|sync] Manages project metadata and syncs SemVer across monorepo
-  bv path [list]             Lists all active unit search paths (-Fu) in app.cfg
-  bv path add <dir|pas2js:p> Adds a folder or official Pas2JS package to app.cfg
-  bv path remove <target>    Removes a search path or Pas2JS package from app.cfg
-  bv path available          Lists all built-in Pas2JS packages available to link
-  bv reset [--bare] [--force] Resets project to a clean slate (protected against demo-app)
-
-  # === Framework Diagnostics & Maintenance ===
-  bv doctor                  Diagnoses environment tools (Git, Lazarus, FPC, Pas2JS, Node)
-  bv self-update [--check] [--force] Syncs & recompiles BlaiseVue directly from GitHub via Git
-  bv channel [use <name>]    Inspects or switches framework branch (main/develop)
-  bv update [--dry-run]      Surgically syncs project infrastructure with latest framework features
-```
 
 ---
 
@@ -228,7 +81,10 @@ BlaiseVue/
 │   ├── BVI18n.pas             # Internationalization & localization engine ($t)
 │   ├── BVTheme.pas            # Theme switcher & persistence engine ($theme)
 │   ├── BVWasm.pas             # WebAssembly acceleration engine ($wasm)
-│   ├── BVStore.pas            # Centralized state management ($store)
+│   ├── BVStore.pas            # BlaiseX 2.0 modular store (, )
+│   ├── BVFSM.pas              # Deterministic Finite State Machines (TBVStateMachine)
+│   ├── BVMiddleware.pas       # Action/mutation pipeline (Logger, AuthGuard, Telemetry)
+│   ├── BVStoreHistory.pas     # Time-travel debugging, snapshots & DevTools bridge
 │   ├── BVAuth.pas             # JWT authentication, session storage & route protection
 │   ├── BVClient.pas           # Reactive REST ($api) & WebSocket ($ws) client helpers
 │   ├── BVDataSet.pas          # LiveBindings, reactive TDataSet & offline delta sync
